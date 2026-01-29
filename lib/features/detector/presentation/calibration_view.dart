@@ -4,6 +4,11 @@ import 'dart:math';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:google_mlkit_face_mesh_detection/google_mlkit_face_mesh_detection.dart'; // Mesh Support
+// ARKit
+import 'package:arkit_plugin/arkit_plugin.dart';
+import 'package:vector_math/vector_math_64.dart' as vector;
+
 import '../data/face_detector_service.dart';
 import '../data/calibration_service.dart';
 import '../../../core/constants/drowsiness_logic.dart';
@@ -17,7 +22,13 @@ class CalibrationView extends StatefulWidget {
 }
 
 class _CalibrationViewState extends State<CalibrationView> {
+  // --- CAMERA (Android/Standard) ---
   CameraController? _cameraController;
+
+  // --- ARKIT (iOS) ---
+  ARKitController? _arkitController;
+  ARKitNode? _faceNode;
+
   final FaceDetectorService _detectorService = FaceDetectorService();
   final CalibrationService _calibrationService = CalibrationService();
 
@@ -26,6 +37,7 @@ class _CalibrationViewState extends State<CalibrationView> {
   bool _isProcessing = false;
   int _timerCount = 10;
 
+  // Data Collection
   List<double> _capturedEarValues = [];
   List<double> _capturedMarValues = [];
 
@@ -34,11 +46,14 @@ class _CalibrationViewState extends State<CalibrationView> {
   double _currentPreviewMar = 0.0;
 
   CustomPaint? _customPaint;
+  bool get _isIOS => Platform.isIOS;
 
   @override
   void initState() {
     super.initState();
-    _initCamera();
+    if (!_isIOS) {
+      _initCamera();
+    }
   }
 
   Future<void> _initCamera() async {
@@ -61,7 +76,8 @@ class _CalibrationViewState extends State<CalibrationView> {
   }
 
   void _startCalibration() async {
-    if (_cameraController == null) return;
+    // Android check only (iOS handles internally)
+    if (!_isIOS && _cameraController == null) return;
 
     setState(() {
       _isCalibrating = true;
@@ -72,7 +88,9 @@ class _CalibrationViewState extends State<CalibrationView> {
       _message = "Keep eyes OPEN. Mouth CLOSED (Neutral).";
     });
 
-    await _cameraController!.startImageStream(_processCameraImage);
+    if (!_isIOS) {
+      await _cameraController!.startImageStream(_processCameraImage);
+    }
 
     Timer.periodic(const Duration(seconds: 1), (timer) async {
       if (_timerCount <= 0 || !mounted || !_isCalibrating) {
@@ -84,6 +102,7 @@ class _CalibrationViewState extends State<CalibrationView> {
     });
   }
 
+  // --- ANDROID PROCESSING ---
   void _processCameraImage(CameraImage image) async {
     if (_isProcessing) return;
     _isProcessing = true;
@@ -91,35 +110,51 @@ class _CalibrationViewState extends State<CalibrationView> {
     try {
       final inputImage = _prepareInputImage(image);
       if (inputImage != null) {
-        final faces = await _detectorService.processImage(inputImage);
+        // Smart Service: Returns List<Face> OR List<FaceMesh>
+        final results = await _detectorService.processImage(inputImage);
 
-        if (faces.isNotEmpty) {
+        List<Face>? faces;
+        List<FaceMesh>? meshes;
+        double ear = 0.0;
+        double mar = 0.0;
+
+        // Check Type
+        if (results is List<FaceMesh> && results.isNotEmpty) {
+          meshes = results;
+          // TODO: Implement proper Mesh EAR/MAR calculation
+          // For now, Mesh support on Android is VISUAL only, falling back logic isn't fully mapped
+          // We can assume if mesh is active, logic needs mesh support.
+          // For this specific step, if using Mesh, we might need a separate calc.
+          // Fallback: If logic isn't ready, service falls back to standard.
+          // Assuming service returned meshes:
+          ear = DrowsinessLogic.calculateMeshEAR(meshes.first);
+          mar = 0.0; // Placeholder
+        } else if (results is List<Face> && results.isNotEmpty) {
+          faces = results;
           final face = faces.first;
-          final ear = DrowsinessLogic.calculateEAR(face);
-          final mar = DrowsinessLogic.calculateMAR(face);
+          ear = DrowsinessLogic.calculateEAR(face);
+          mar = DrowsinessLogic.calculateMAR(face);
+        }
 
-          final painter = FaceDetectorPainter(
-            faces,
-            inputImage.metadata!.size,
-            inputImage.metadata!.rotation,
-            CameraLensDirection.front,
-            false,
-          );
+        final painter = FaceDetectorPainter(
+          imageSize: inputImage.metadata!.size,
+          rotation: inputImage.metadata!.rotation,
+          cameraLensDirection: CameraLensDirection.front,
+          faces: faces, // Pass if standard
+          meshes: meshes, // Pass if mesh
+        );
 
-          if (_isCalibrating) {
-            if (ear > 0.0) _capturedEarValues.add(ear);
-            if (mar > 0.0) _capturedMarValues.add(mar);
-          }
+        if (_isCalibrating) {
+          if (ear > 0.0) _capturedEarValues.add(ear);
+          if (mar > 0.0) _capturedMarValues.add(mar);
+        }
 
-          if (mounted) {
-            setState(() {
-              _currentPreviewEar = ear;
-              _currentPreviewMar = mar;
-              _customPaint = CustomPaint(painter: painter);
-            });
-          }
-        } else {
-          if (mounted) setState(() => _customPaint = null);
+        if (mounted) {
+          setState(() {
+            _currentPreviewEar = ear;
+            _currentPreviewMar = mar;
+            _customPaint = CustomPaint(painter: painter);
+          });
         }
       }
     } catch (e) {
@@ -129,8 +164,51 @@ class _CalibrationViewState extends State<CalibrationView> {
     }
   }
 
+  // --- iOS ARKIT LOGIC ---
+  void _onARKitViewCreated(ARKitController arkitController) {
+    _arkitController = arkitController;
+    _arkitController?.onAddNodeForAnchor = _handleAddAnchor;
+    _arkitController?.onUpdateNodeForAnchor = _handleUpdateAnchor;
+  }
+
+  void _handleAddAnchor(ARKitAnchor anchor) {
+    if (anchor is! ARKitFaceAnchor) return;
+    final material = ARKitMaterial(fillMode: ARKitFillMode.lines, diffuse: ARKitMaterialProperty.color(Colors.cyanAccent.withOpacity(0.8)));
+    anchor.geometry.materials.value = [material];
+    _faceNode = ARKitNode(geometry: anchor.geometry);
+    _arkitController?.add(_faceNode!, parentNodeName: anchor.nodeName);
+  }
+
+  void _handleUpdateAnchor(ARKitAnchor anchor) {
+    if (anchor is ARKitFaceAnchor && mounted) {
+      if (_faceNode != null) {
+        _arkitController?.updateFaceGeometry(_faceNode!, anchor.identifier);
+      }
+
+      // Calculate Metrics
+      final blendShapes = anchor.blendShapes;
+      final double leftBlink = blendShapes['eyeBlink_L'] ?? 0.0;
+      final double rightBlink = blendShapes['eyeBlink_R'] ?? 0.0;
+      final double jawOpen = blendShapes['jawOpen'] ?? 0.0;
+
+      final double ear = DrowsinessLogic.calculateArKitEAR(leftBlink, rightBlink);
+      final double mar = DrowsinessLogic.calculateArKitMAR(jawOpen);
+
+      // Collect Data
+      if (_isCalibrating) {
+        _capturedEarValues.add(ear);
+        _capturedMarValues.add(mar);
+      }
+
+      setState(() {
+        _currentPreviewEar = ear;
+        _currentPreviewMar = mar;
+      });
+    }
+  }
+
   Future<void> _finishCalibration() async {
-    await _cameraController?.stopImageStream();
+    if (!_isIOS) await _cameraController?.stopImageStream();
     setState(() => _customPaint = null);
 
     if (_capturedEarValues.isEmpty) {
@@ -141,7 +219,7 @@ class _CalibrationViewState extends State<CalibrationView> {
       return;
     }
 
-    // EAR Logic
+    // Logic matches DetectorView
     _capturedEarValues.sort();
     int start = (_capturedEarValues.length * 0.10).toInt();
     int end = (_capturedEarValues.length * 0.90).toInt();
@@ -149,21 +227,17 @@ class _CalibrationViewState extends State<CalibrationView> {
 
     List<double> validEar = _capturedEarValues.sublist(start, end);
     double avgOpenEar = validEar.reduce((a, b) => a + b) / validEar.length;
-    double personalEarThreshold = avgOpenEar * 0.75;
+    double personalEarThreshold = avgOpenEar * 0.60; // Stricter
 
-    // MAR Logic
     double personalMarThreshold = 0.5;
     if (_capturedMarValues.isNotEmpty) {
       _capturedMarValues.sort();
       int mStart = (_capturedMarValues.length * 0.10).toInt();
       int mEnd = (_capturedMarValues.length * 0.90).toInt();
       if (mEnd <= mStart) { mStart = 0; mEnd = _capturedMarValues.length; }
-
       List<double> validMar = _capturedMarValues.sublist(mStart, mEnd);
       double avgRestingMar = validMar.reduce((a, b) => a + b) / validMar.length;
-
       personalMarThreshold = avgRestingMar + 0.25;
-
       if (personalMarThreshold < 0.3) personalMarThreshold = 0.3;
       if (personalMarThreshold > 0.6) personalMarThreshold = 0.6;
     }
@@ -173,19 +247,13 @@ class _CalibrationViewState extends State<CalibrationView> {
     setState(() {
       _isCalibrating = false;
       _calibrationSuccess = true;
-      _message = "Success!\n"
-          "EAR Thresh: ${personalEarThreshold.toStringAsFixed(3)}\n"
-          "MAR Thresh: ${personalMarThreshold.toStringAsFixed(3)}";
+      _message = "Success!\nEAR Thresh: ${personalEarThreshold.toStringAsFixed(3)}\nMAR Thresh: ${personalMarThreshold.toStringAsFixed(3)}";
     });
   }
 
-  // Safe Exit Method used by button AND PopScope
   Future<void> _safeExit() async {
-    // 1. Stop processing
     _isProcessing = true;
-
-    // 2. Stop stream and dispose explicitly
-    if (_cameraController != null) {
+    if (!_isIOS && _cameraController != null) {
       if (_cameraController!.value.isStreamingImages) {
         await _cameraController!.stopImageStream();
       }
@@ -193,18 +261,17 @@ class _CalibrationViewState extends State<CalibrationView> {
     }
     _cameraController = null;
 
-    if (!mounted) return;
+    // Clean ARKit
+    _arkitController?.dispose();
+    _arkitController = null;
 
-    // 3. Pop ONLY if we can (to avoid duplicate pops if PopScope triggered this)
-    if (Navigator.canPop(context)) {
-      Navigator.pop(context);
-    }
+    if (!mounted) return;
+    if (Navigator.canPop(context)) Navigator.pop(context);
   }
 
   InputImage? _prepareInputImage(CameraImage image) {
     if (_cameraController == null) return null;
     final plane = image.planes.first;
-
     return InputImage.fromBytes(
       bytes: plane.bytes,
       metadata: InputImageMetadata(
@@ -220,31 +287,34 @@ class _CalibrationViewState extends State<CalibrationView> {
   void dispose() {
     _cameraController?.dispose();
     _detectorService.dispose();
+    _arkitController?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool isCameraReady = _cameraController != null && _cameraController!.value.isInitialized;
+    final bool isCameraReady = _isIOS || (_cameraController != null && _cameraController!.value.isInitialized);
 
-    // PopScope intercepts the System Back Button (Android/iOS Swipe)
     return PopScope(
-      canPop: false, // Prevent default pop
+      canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
-        // Perform safe cleanup, then pop manually
         await _safeExit();
       },
       child: Scaffold(
         appBar: AppBar(title: const Text("Calibration")),
         body: Stack(
           children: [
-            if (isCameraReady)
+            if (_isIOS)
+              ARKitSceneView(
+                configuration: ARKitConfiguration.faceTracking,
+                onARKitViewCreated: _onARKitViewCreated,
+                enableTapRecognizer: false,
+              )
+            else if (isCameraReady)
               Positioned.fill(
                 child: Transform.scale(
-                  scale: MediaQuery.of(context).size.aspectRatio * _cameraController!.value.aspectRatio < 1
-                      ? 1 / (MediaQuery.of(context).size.aspectRatio * _cameraController!.value.aspectRatio)
-                      : MediaQuery.of(context).size.aspectRatio * _cameraController!.value.aspectRatio,
+                  scale: MediaQuery.of(context).size.aspectRatio * _cameraController!.value.aspectRatio,
                   child: Center(
                     child: CameraPreview(_cameraController!, child: _customPaint),
                   ),
@@ -261,24 +331,8 @@ class _CalibrationViewState extends State<CalibrationView> {
                     padding: const EdgeInsets.only(top: 20),
                     child: Column(
                       children: [
-                        Text(
-                          "EAR: ${_currentPreviewEar.toStringAsFixed(3)}",
-                          style: const TextStyle(
-                              color: Colors.greenAccent,
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              shadows: [Shadow(blurRadius: 2, color: Colors.black)]
-                          ),
-                        ),
-                        Text(
-                          "MAR: ${_currentPreviewMar.toStringAsFixed(3)}",
-                          style: const TextStyle(
-                              color: Colors.yellowAccent,
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              shadows: [Shadow(blurRadius: 2, color: Colors.black)]
-                          ),
-                        ),
+                        Text("EAR: ${_currentPreviewEar.toStringAsFixed(3)}", style: const TextStyle(color: Colors.greenAccent, fontSize: 20, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 2, color: Colors.black)])),
+                        Text("MAR: ${_currentPreviewMar.toStringAsFixed(3)}", style: const TextStyle(color: Colors.yellowAccent, fontSize: 20, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 2, color: Colors.black)])),
                       ],
                     ),
                   )
@@ -287,10 +341,7 @@ class _CalibrationViewState extends State<CalibrationView> {
 
                 Container(
                   padding: const EdgeInsets.all(24),
-                  decoration: const BoxDecoration(
-                    color: Colors.black87,
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-                  ),
+                  decoration: const BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
                   width: double.infinity,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
