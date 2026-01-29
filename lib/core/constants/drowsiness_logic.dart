@@ -4,8 +4,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 class DrowsinessLogic {
   // --- THRESHOLDS ---
-  // Lowered default to be more conservative
-  static const double defaultEyeClosedThreshold = 0.18;
+  static const double defaultEyeClosedThreshold = 0.25;
   static const double yawnMarThreshold = 0.4;
   static const double headNodPitchThreshold = -15.0;
 
@@ -19,13 +18,14 @@ class DrowsinessLogic {
   static const double weightMouth = 20.0;
 
   // --- SCORING WEIGHTS (Occluded Mode) ---
-  // When eyes are gone, we trust head/mouth more
   static const double weightHeadOccluded = 80.0;
   static const double weightMouthOccluded = 40.0;
 
   // --- ALERT LEVELS ---
   static const double scoreThresholdAlert = 100.0;
   static const double scoreThresholdWarning = 75.0;
+
+  // --- ML KIT METHODS (Standard) ---
 
   /// Calculates Geometric Eye Aspect Ratio (EAR)
   static double calculateEAR(Face face) {
@@ -86,6 +86,21 @@ class DrowsinessLogic {
 
     if (width <= 0) return 0.0;
     return height / width;
+  }
+
+  // --- ARKIT METHODS (Added for iOS) ---
+
+  static double calculateArKitEAR(double eyeBlinkLeft, double eyeBlinkRight) {
+    // ARKit returns 0.0 for open, 1.0 for closed.
+    // We invert this to match EAR logic (High = Open, Low = Closed).
+    double avgBlink = (eyeBlinkLeft + eyeBlinkRight) / 2.0;
+    return (1.0 - avgBlink) * 0.35; // Scaling factor to match geometric EAR roughly
+  }
+
+  static double calculateArKitMAR(double jawOpen) {
+    // ARKit jawOpen is 0.0 (closed) to 1.0 (open).
+    // This maps directly to MAR logic.
+    return jawOpen;
   }
 
   static bool isDrowsy(double currentEAR, double threshold) {

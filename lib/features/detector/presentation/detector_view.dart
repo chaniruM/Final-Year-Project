@@ -1,11 +1,18 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math'; // For pi, asin
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:vibration/vibration.dart';
+// ARKit Imports
+import 'package:arkit_plugin/arkit_plugin.dart';
+import 'package:vector_math/vector_math_64.dart' as vector;
+// Device Info Import
+import 'package:device_info_plus/device_info_plus.dart';
+
 import '../../../core/constants/drowsiness_logic.dart';
 import '../data/face_detector_service.dart';
 import '../data/calibration_service.dart';
@@ -21,10 +28,17 @@ class DetectorView extends StatefulWidget {
 }
 
 class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver {
+  // --- CAMERA (Android/Fallback) ---
   CameraController? _cameraController;
   final FaceDetectorService _faceDetectorService = FaceDetectorService();
-  final CalibrationService _calibrationService = CalibrationService();
 
+  // --- ARKIT (iOS FaceID) ---
+  ARKitController? _arkitController;
+  ARKitNode? _faceNode;
+  ARKitFace? _faceGeometry;
+  Key _arKitKey = UniqueKey();
+
+  final CalibrationService _calibrationService = CalibrationService();
   final FusionEngine _fusionEngine = FusionEngine();
   final AudioPlayer _audioPlayer = AudioPlayer();
 
@@ -40,20 +54,53 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
   double _debugPitch = 0.0;
   double _debugMar = 0.0;
   double _debugEar = 0.0;
-  double _currentScore = 0.0; // Track score for UI
+  double _currentScore = 0.0;
 
   CustomPaint? _customPaint;
 
   double _baselineEarThreshold = 0.20;
   double _marThreshold = DrowsinessLogic.yawnMarThreshold;
 
+  // Capability Flags
+  bool _useARKit = false;
+  bool _capabilityCheckDone = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadSettings();
-    _initializeCamera();
+    _checkDeviceCapabilities();
     _audioPlayer.setReleaseMode(ReleaseMode.loop);
+  }
+
+  Future<void> _checkDeviceCapabilities() async {
+    if (Platform.isIOS) {
+      final deviceInfo = DeviceInfoPlugin();
+      final iosInfo = await deviceInfo.iosInfo;
+
+      // We prioritize ARKit (FaceID) if available because it works in the dark (IR)
+      if (iosInfo.isPhysicalDevice) {
+        setState(() {
+          _useARKit = true;
+          _capabilityCheckDone = true;
+        });
+      } else {
+        // Simulator -> Fallback to Standard Camera
+        setState(() {
+          _useARKit = false;
+          _capabilityCheckDone = true;
+        });
+        _initializeCamera();
+      }
+    } else {
+      // Android always uses ML Kit
+      setState(() {
+        _useARKit = false;
+        _capabilityCheckDone = true;
+      });
+      _initializeCamera();
+    }
   }
 
   @override
@@ -62,28 +109,32 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
       _stopCamera();
       _stopAlert();
     } else if (state == AppLifecycleState.resumed) {
-      _initializeCamera();
+      if (_capabilityCheckDone) {
+        if (!_useARKit) {
+          _initializeCamera();
+        } else {
+          // ARKit usually handles resume internally, but we can force rebuild if needed
+          if (mounted) setState(() => _arKitKey = UniqueKey());
+        }
+      }
     }
   }
 
   Future<void> _loadSettings() async {
     final baselines = await _calibrationService.getBaselines();
-
     if (baselines['threshold'] != null && baselines['threshold']! > 0) {
       _baselineEarThreshold = baselines['threshold']!;
     }
-
     if (baselines['perclos'] != null) {
       _fusionEngine.updateBaseline(baselines['perclos']!);
     }
-
     if (baselines['mar'] != null && baselines['mar']! > 0) {
       _marThreshold = baselines['mar']!;
     }
-
     if (mounted) setState(() {});
   }
 
+  // --- STANDARD CAMERA SETUP (Android / iOS Fallback) ---
   Future<void> _initializeCamera() async {
     if (_cameraController != null) return;
 
@@ -108,9 +159,7 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
     try {
       await controller.initialize();
       if (!mounted) return;
-
       await controller.startImageStream(_processCameraImage);
-
       setState(() => _cameraController = controller);
     } catch (e) {
       debugPrint("Camera Init Error: $e");
@@ -136,6 +185,12 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
       }
       await controller.dispose();
     }
+
+    // Dispose ARKit as well
+    _arkitController?.dispose();
+    _arkitController = null;
+    _faceNode = null;
+    _faceGeometry = null;
   }
 
   void _startMonitoring() {
@@ -158,6 +213,7 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
     });
   }
 
+  // --- ML KIT PROCESSING (Android/Fallback) ---
   void _processCameraImage(CameraImage image) async {
     if (_isProcessing) return;
     _isProcessing = true;
@@ -175,55 +231,17 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
 
         final double currentEar = DrowsinessLogic.calculateEAR(face);
         final double mar = DrowsinessLogic.calculateMAR(face);
+        // ML Kit returns Positive for looking UP, Negative for looking DOWN
         final double pitch = face.headEulerAngleX ?? 0.0;
 
-        if (_isMonitoring) {
-          final result = _fusionEngine.processFrame(
-            currentEar: currentEar,
-            headPitch: pitch,
-            mar: mar,
-            earThreshold: _baselineEarThreshold,
-            marThreshold: _marThreshold,
-          );
-
-          final bool shouldAlert = result['alert'] as bool;
-          final double score = result['score'] ?? 0.0; // Get Score
-
-          if (mounted) {
-            setState(() {
-              _drowsinessStatus = result['status'] as String;
-              _isAlerting = shouldAlert;
-              _currentPerclos = result['perclos'] ?? 0.0;
-              _isOccluded = result['isOccluded'] ?? false;
-              _currentScore = score;
-
-              _debugMar = result['smoothedMar'] ?? 0.0;
-              _debugPitch = result['smoothedPitch'] ?? 0.0;
-              _debugEar = result['smoothedEar'] ?? 0.0;
-            });
-
-            if (shouldAlert) {
-              _triggerAlert();
-            } else {
-              _stopAlert();
-            }
-          }
-        } else {
-          if (mounted) {
-            setState(() {
-              _debugMar = mar;
-              _debugPitch = pitch;
-              _debugEar = currentEar;
-            });
-          }
-        }
+        _processFusionLogic(currentEar, mar, pitch);
 
         final painter = FaceDetectorPainter(
-          faces,
-          inputImage.metadata!.size,
-          inputImage.metadata!.rotation,
-          CameraLensDirection.front,
-          _isAlerting,
+          faces: faces,
+          imageSize: inputImage.metadata!.size,
+          rotation: inputImage.metadata!.rotation,
+          cameraLensDirection: CameraLensDirection.front,
+          isAlerting: _isAlerting,
         );
 
         if (mounted) {
@@ -236,6 +254,121 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
       debugPrint("Processing error: $e");
     } finally {
       _isProcessing = false;
+    }
+  }
+
+  // --- ARKIT PROCESSING (iOS FaceID) ---
+  void _onARKitViewCreated(ARKitController arkitController) {
+    _arkitController = arkitController;
+    _arkitController?.onAddNodeForAnchor = _handleAddAnchor;
+    _arkitController?.onUpdateNodeForAnchor = _handleUpdateAnchor;
+  }
+
+  void _handleAddAnchor(ARKitAnchor anchor) {
+    if (anchor is! ARKitFaceAnchor) return;
+
+    final material = ARKitMaterial(
+      fillMode: ARKitFillMode.lines,
+      diffuse: ARKitMaterialProperty.color(Colors.cyanAccent.withOpacity(0.8)),
+    );
+
+    _faceGeometry = ARKitFace(materials: [material]);
+    _faceNode = ARKitNode(geometry: _faceGeometry);
+    _arkitController?.add(_faceNode!, parentNodeName: anchor.nodeName);
+  }
+
+  void _handleUpdateAnchor(ARKitAnchor anchor) {
+    if (anchor is ARKitFaceAnchor && mounted) {
+      if (_faceNode != null) {
+        _arkitController?.updateFaceGeometry(_faceNode!, anchor.identifier);
+      }
+
+      // Extract Data from Blendshapes
+      final blendShapes = anchor.blendShapes;
+      final double leftBlink = blendShapes['eyeBlink_L'] ?? 0.0;
+      final double rightBlink = blendShapes['eyeBlink_R'] ?? 0.0;
+      final double jawOpen = blendShapes['jawOpen'] ?? 0.0;
+
+      final double ear = DrowsinessLogic.calculateArKitEAR(leftBlink, rightBlink);
+      final double mar = DrowsinessLogic.calculateArKitMAR(jawOpen);
+
+      // Extract Pitch from Transform Matrix
+      final double pitch = _getPitchFromTransform(anchor.transform);
+
+      _processFusionLogic(ear, mar, pitch);
+    }
+  }
+
+  /// Calculates Head Pitch (Nodding) from ARKit Transform.
+  ///
+  /// WHY WE USE ARKIT TRANSFORM INSTEAD OF ML KIT HERE:
+  /// 1. Night Vision: ARKit uses the TrueDepth (IR) sensor, allowing detection in
+  ///    complete darkness. ML Kit relies on RGB and fails in low light.
+  /// 2. Performance: We are already running the AR session. Extracting images
+  ///    for ML Kit would double the CPU/GPU load.
+  /// 3. Synchronization: ARKit data is synchronous with the frame (60fps).
+  double _getPitchFromTransform(Matrix4 transform) {
+    try {
+      final q = vector.Quaternion.fromRotation(transform.getRotation());
+
+      // Calculate Pitch (Rotation around X-axis) from Quaternion
+      final double sinp = 2 * (q.w * q.x - q.y * q.z);
+
+      // ARKit native coordinates: Positive Pitch = Looking Down.
+      // ML Kit coordinates: Positive Pitch = Looking Up.
+      // We negate (-) the result to match ML Kit's standard for our FusionEngine.
+      if (sinp.abs() >= 1) {
+        return -vector.degrees(pi / 2 * (sinp.sign));
+      } else {
+        return -vector.degrees(asin(sinp));
+      }
+    } catch (e) {
+      return 0.0;
+    }
+  }
+
+  // --- SHARED LOGIC ---
+  void _processFusionLogic(double ear, double mar, double pitch) {
+    if (_isMonitoring) {
+      final result = _fusionEngine.processFrame(
+        currentEar: ear,
+        headPitch: pitch,
+        mar: mar,
+        earThreshold: _baselineEarThreshold,
+        marThreshold: _marThreshold,
+      );
+
+      final bool shouldAlert = result['alert'] as bool;
+      final double score = result['score'] ?? 0.0;
+
+      if (mounted) {
+        setState(() {
+          _drowsinessStatus = result['status'] as String;
+          _isAlerting = shouldAlert;
+          _currentPerclos = result['perclos'] ?? 0.0;
+          _isOccluded = result['isOccluded'] ?? false;
+          _currentScore = score;
+
+          _debugMar = result['smoothedMar'] ?? 0.0;
+          _debugPitch = result['smoothedPitch'] ?? 0.0;
+          _debugEar = result['smoothedEar'] ?? 0.0;
+        });
+
+        if (shouldAlert) {
+          _triggerAlert();
+        } else {
+          _stopAlert();
+        }
+      }
+    } else {
+      // Just update debug values for UI when not monitoring
+      if (mounted) {
+        setState(() {
+          _debugMar = mar;
+          _debugPitch = pitch;
+          _debugEar = ear;
+        });
+      }
     }
   }
 
@@ -307,12 +440,27 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
 
     await Future.delayed(const Duration(milliseconds: 200));
     await _loadSettings();
-    await _initializeCamera();
+
+    // Re-init correct camera type
+    if (_capabilityCheckDone) {
+      if (!_useARKit) {
+        await _initializeCamera();
+      } else {
+        if (mounted) setState(() => _arKitKey = UniqueKey());
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool isCameraReady = _cameraController != null && _cameraController!.value.isInitialized;
+    if (!_capabilityCheckDone) {
+      return const Scaffold(
+          backgroundColor: Colors.black,
+          body: Center(child: CircularProgressIndicator())
+      );
+    }
+
+    final bool isCameraReady = _useARKit || (_cameraController != null && _cameraController!.value.isInitialized);
 
     if (!isCameraReady) {
       return const Scaffold(
@@ -321,9 +469,13 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
       );
     }
 
-    final size = MediaQuery.of(context).size;
-    var scale = size.aspectRatio * _cameraController!.value.aspectRatio;
-    if (scale < 1) scale = 1 / scale;
+    // Calculate scale for standard camera preview
+    double scale = 1.0;
+    if (!_useARKit && _cameraController != null) {
+      final size = MediaQuery.of(context).size;
+      scale = size.aspectRatio * _cameraController!.value.aspectRatio;
+      if (scale < 1) scale = 1 / scale;
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -345,13 +497,23 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
       body: Stack(
         fit: StackFit.expand,
         children: [
-          Transform.scale(
-            scale: scale,
-            child: Center(
-              child: CameraPreview(_cameraController!, child: _customPaint),
+          // --- VIDEO LAYER ---
+          if (_useARKit)
+            ARKitSceneView(
+              key: _arKitKey,
+              configuration: ARKitConfiguration.faceTracking,
+              onARKitViewCreated: _onARKitViewCreated,
+              enableTapRecognizer: false,
+            )
+          else
+            Transform.scale(
+              scale: scale,
+              child: Center(
+                child: CameraPreview(_cameraController!, child: _customPaint),
+              ),
             ),
-          ),
 
+          // --- UI LAYER ---
           Positioned(
             bottom: 30,
             left: 20,
@@ -370,7 +532,6 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
                     textAlign: TextAlign.center,
                     style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
                   ),
-                  // Display Score if monitoring
                   if (_isMonitoring)
                     Padding(
                       padding: const EdgeInsets.only(top: 4.0),

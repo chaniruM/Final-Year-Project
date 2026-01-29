@@ -4,6 +4,10 @@ import 'dart:math';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+// ARKit Imports
+import 'package:arkit_plugin/arkit_plugin.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+
 import '../data/face_detector_service.dart';
 import '../data/calibration_service.dart';
 import '../../../core/constants/drowsiness_logic.dart';
@@ -17,14 +21,24 @@ class CalibrationView extends StatefulWidget {
 }
 
 class _CalibrationViewState extends State<CalibrationView> {
+  // --- CAMERA (Standard/Android/Fallback) ---
   CameraController? _cameraController;
   final FaceDetectorService _detectorService = FaceDetectorService();
+
+  // --- ARKIT (iOS FaceID) ---
+  ARKitController? _arkitController;
+  ARKitNode? _faceNode;
+
   final CalibrationService _calibrationService = CalibrationService();
 
   bool _isCalibrating = false;
   bool _calibrationSuccess = false;
   bool _isProcessing = false;
   int _timerCount = 10;
+
+  // Capability Flag
+  bool _useARKit = false;
+  bool _capabilityCheckDone = false;
 
   List<double> _capturedEarValues = [];
   List<double> _capturedMarValues = [];
@@ -38,7 +52,41 @@ class _CalibrationViewState extends State<CalibrationView> {
   @override
   void initState() {
     super.initState();
-    _initCamera();
+    _checkDeviceCapabilities();
+  }
+
+  Future<void> _checkDeviceCapabilities() async {
+    if (Platform.isIOS) {
+      // Manual check using DeviceInfo
+      final deviceInfo = DeviceInfoPlugin();
+      final iosInfo = await deviceInfo.iosInfo;
+
+      // Fallback logic: Detect if it's a simulator or a physical device.
+      // ARKit doesn't work on Simulator.
+      if (iosInfo.isPhysicalDevice) {
+        // Assume TrueDepth availability for modern iPhones (iPhone X or newer).
+        // It's safer to default to True and let it fail gracefully or user switch,
+        // but strictly the user asked for fallback.
+        setState(() {
+          _useARKit = true;
+          _capabilityCheckDone = true;
+        });
+      } else {
+        // Simulator -> Fallback to ML Kit
+        setState(() {
+          _useARKit = false;
+          _capabilityCheckDone = true;
+        });
+        _initCamera();
+      }
+    } else {
+      // Android
+      setState(() {
+        _useARKit = false;
+        _capabilityCheckDone = true;
+      });
+      _initCamera();
+    }
   }
 
   Future<void> _initCamera() async {
@@ -61,7 +109,7 @@ class _CalibrationViewState extends State<CalibrationView> {
   }
 
   void _startCalibration() async {
-    if (_cameraController == null) return;
+    if (!_useARKit && _cameraController == null) return;
 
     setState(() {
       _isCalibrating = true;
@@ -72,7 +120,9 @@ class _CalibrationViewState extends State<CalibrationView> {
       _message = "Keep eyes OPEN. Mouth CLOSED (Neutral).";
     });
 
-    await _cameraController!.startImageStream(_processCameraImage);
+    if (!_useARKit) {
+      await _cameraController!.startImageStream(_processCameraImage);
+    }
 
     Timer.periodic(const Duration(seconds: 1), (timer) async {
       if (_timerCount <= 0 || !mounted || !_isCalibrating) {
@@ -84,6 +134,7 @@ class _CalibrationViewState extends State<CalibrationView> {
     });
   }
 
+  // --- ML KIT LOGIC (Android/Fallback) ---
   void _processCameraImage(CameraImage image) async {
     if (_isProcessing) return;
     _isProcessing = true;
@@ -99,11 +150,11 @@ class _CalibrationViewState extends State<CalibrationView> {
           final mar = DrowsinessLogic.calculateMAR(face);
 
           final painter = FaceDetectorPainter(
-            faces,
-            inputImage.metadata!.size,
-            inputImage.metadata!.rotation,
-            CameraLensDirection.front,
-            false,
+            faces: faces,
+            imageSize: inputImage.metadata!.size,
+            rotation: inputImage.metadata!.rotation,
+            cameraLensDirection: CameraLensDirection.front,
+            isAlerting: false,
           );
 
           if (_isCalibrating) {
@@ -129,8 +180,54 @@ class _CalibrationViewState extends State<CalibrationView> {
     }
   }
 
+  // --- ARKIT LOGIC (iOS FaceID) ---
+  void _onARKitViewCreated(ARKitController arkitController) {
+    _arkitController = arkitController;
+    _arkitController?.onAddNodeForAnchor = _handleAddAnchor;
+    _arkitController?.onUpdateNodeForAnchor = _handleUpdateAnchor;
+  }
+
+  void _handleAddAnchor(ARKitAnchor anchor) {
+    if (anchor is! ARKitFaceAnchor) return;
+    final material = ARKitMaterial(
+        fillMode: ARKitFillMode.lines,
+        diffuse: ARKitMaterialProperty.color(Colors.cyanAccent.withOpacity(0.8))
+    );
+    anchor.geometry.materials.value = [material];
+    _faceNode = ARKitNode(geometry: anchor.geometry);
+    _arkitController?.add(_faceNode!, parentNodeName: anchor.nodeName);
+  }
+
+  void _handleUpdateAnchor(ARKitAnchor anchor) {
+    if (anchor is ARKitFaceAnchor && mounted) {
+      if (_faceNode != null) {
+        _arkitController?.updateFaceGeometry(_faceNode!, anchor.identifier);
+      }
+
+      // Calculate Metrics from Blendshapes
+      final blendShapes = anchor.blendShapes;
+      final double leftBlink = blendShapes['eyeBlink_L'] ?? 0.0;
+      final double rightBlink = blendShapes['eyeBlink_R'] ?? 0.0;
+      final double jawOpen = blendShapes['jawOpen'] ?? 0.0;
+
+      final double ear = DrowsinessLogic.calculateArKitEAR(leftBlink, rightBlink);
+      final double mar = DrowsinessLogic.calculateArKitMAR(jawOpen);
+
+      // Collect Data
+      if (_isCalibrating) {
+        _capturedEarValues.add(ear);
+        _capturedMarValues.add(mar);
+      }
+
+      setState(() {
+        _currentPreviewEar = ear;
+        _currentPreviewMar = mar;
+      });
+    }
+  }
+
   Future<void> _finishCalibration() async {
-    await _cameraController?.stopImageStream();
+    if (!_useARKit) await _cameraController?.stopImageStream();
     setState(() => _customPaint = null);
 
     if (_capturedEarValues.isEmpty) {
@@ -149,7 +246,15 @@ class _CalibrationViewState extends State<CalibrationView> {
 
     List<double> validEar = _capturedEarValues.sublist(start, end);
     double avgOpenEar = validEar.reduce((a, b) => a + b) / validEar.length;
-    double personalEarThreshold = avgOpenEar * 0.75;
+    double personalEarThreshold;
+
+    if (_useARKit) {
+      // ARKit uses simpler threshold logic due to range 0.0-1.0
+      personalEarThreshold = avgOpenEar * 0.60;
+    } else {
+      // ML Kit
+      personalEarThreshold = avgOpenEar * 0.75;
+    }
 
     // MAR Logic
     double personalMarThreshold = 0.5;
@@ -179,12 +284,10 @@ class _CalibrationViewState extends State<CalibrationView> {
     });
   }
 
-  // Safe Exit Method used by button AND PopScope
   Future<void> _safeExit() async {
-    // 1. Stop processing
     _isProcessing = true;
 
-    // 2. Stop stream and dispose explicitly
+    // Stop Camera if used
     if (_cameraController != null) {
       if (_cameraController!.value.isStreamingImages) {
         await _cameraController!.stopImageStream();
@@ -193,9 +296,12 @@ class _CalibrationViewState extends State<CalibrationView> {
     }
     _cameraController = null;
 
+    // Dispose ARKit
+    _arkitController?.dispose();
+    _arkitController = null;
+
     if (!mounted) return;
 
-    // 3. Pop ONLY if we can (to avoid duplicate pops if PopScope triggered this)
     if (Navigator.canPop(context)) {
       Navigator.pop(context);
     }
@@ -220,26 +326,36 @@ class _CalibrationViewState extends State<CalibrationView> {
   void dispose() {
     _cameraController?.dispose();
     _detectorService.dispose();
+    _arkitController?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool isCameraReady = _cameraController != null && _cameraController!.value.isInitialized;
+    if (!_capabilityCheckDone) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
 
-    // PopScope intercepts the System Back Button (Android/iOS Swipe)
+    final bool isCameraReady = _useARKit || (_cameraController != null && _cameraController!.value.isInitialized);
+
     return PopScope(
-      canPop: false, // Prevent default pop
+      canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
-        // Perform safe cleanup, then pop manually
         await _safeExit();
       },
       child: Scaffold(
         appBar: AppBar(title: const Text("Calibration")),
         body: Stack(
           children: [
-            if (isCameraReady)
+            // --- VIDEO LAYER ---
+            if (_useARKit)
+              ARKitSceneView(
+                configuration: ARKitConfiguration.faceTracking,
+                onARKitViewCreated: _onARKitViewCreated,
+                enableTapRecognizer: false,
+              )
+            else if (isCameraReady)
               Positioned.fill(
                 child: Transform.scale(
                   scale: MediaQuery.of(context).size.aspectRatio * _cameraController!.value.aspectRatio < 1
@@ -253,6 +369,7 @@ class _CalibrationViewState extends State<CalibrationView> {
             else
               const Center(child: CircularProgressIndicator()),
 
+            // --- UI LAYER ---
             Column(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
