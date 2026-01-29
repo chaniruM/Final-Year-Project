@@ -1,17 +1,22 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:camera/camera.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:arkit_plugin/arkit_plugin.dart'; // iOS
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart'; // Fallback
+import 'package:google_mlkit_face_mesh_detection/google_mlkit_face_mesh_detection.dart'; // Android Mesh
 import 'package:audioplayers/audioplayers.dart';
 import 'package:vibration/vibration.dart';
+
 import '../../../core/constants/drowsiness_logic.dart';
+import '../../../core/models/driver_state.dart';
 import '../data/face_detector_service.dart';
+import '../data/face_mesh_service.dart';
 import '../data/calibration_service.dart';
-import 'calibration_view.dart';
-import 'profile_view.dart';
 import 'painters/face_detector_painter.dart';
+import 'painters/face_mesh_painter.dart';
+import 'profile_view.dart';
+import 'calibration_view.dart';
 
 class DetectorView extends StatefulWidget {
   const DetectorView({super.key});
@@ -21,29 +26,35 @@ class DetectorView extends StatefulWidget {
 }
 
 class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver {
-  CameraController? _cameraController;
-  final FaceDetectorService _faceDetectorService = FaceDetectorService();
+  // --- Services ---
   final CalibrationService _calibrationService = CalibrationService();
-
   final FusionEngine _fusionEngine = FusionEngine();
   final AudioPlayer _audioPlayer = AudioPlayer();
 
+  // --- Android / Legacy Variables ---
+  CameraController? _cameraController;
+  final FaceDetectorService _legacyService = FaceDetectorService();
+  final FaceMeshService _meshService = FaceMeshService();
   bool _isProcessing = false;
-  bool _isMonitoring = false;
-
-  String _drowsinessStatus = "Ready to Start";
-  bool _isAlerting = false;
-  bool _isOccluded = false;
-  double _currentPerclos = 0.0;
-
-  // Debug values
-  double _debugPitch = 0.0;
-  double _debugMar = 0.0;
-  double _debugEar = 0.0;
-  double _currentScore = 0.0; // Track score for UI
-
   CustomPaint? _customPaint;
 
+  // --- iOS AR Variables ---
+  ARKitController? _arController;
+  ARKitNode? _faceNode;
+  bool _useArKit = false;
+
+  // --- State ---
+  bool _isMonitoring = false;
+  String _drowsinessStatus = "Initializing...";
+  bool _isAlerting = false;
+  double _currentScore = 0.0;
+
+  // Debug UI
+  double _debugEar = 0.0;
+  double _debugMar = 0.0;
+  double _debugPitch = 0.0;
+
+  // Settings
   double _baselineEarThreshold = 0.20;
   double _marThreshold = DrowsinessLogic.yawnMarThreshold;
 
@@ -51,47 +62,109 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _loadSettings();
-    _initializeCamera();
     _audioPlayer.setReleaseMode(ReleaseMode.loop);
+    _checkPlatformAndInit();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.inactive) {
-      _stopCamera();
-      _stopAlert();
-    } else if (state == AppLifecycleState.resumed) {
+  Future<void> _checkPlatformAndInit() async {
+    await _loadSettings();
+
+    if (Platform.isIOS) {
+      setState(() {
+        _useArKit = true;
+      });
+    } else {
       _initializeCamera();
     }
   }
 
   Future<void> _loadSettings() async {
     final baselines = await _calibrationService.getBaselines();
-
     if (baselines['threshold'] != null && baselines['threshold']! > 0) {
       _baselineEarThreshold = baselines['threshold']!;
     }
-
-    if (baselines['perclos'] != null) {
-      _fusionEngine.updateBaseline(baselines['perclos']!);
-    }
-
     if (baselines['mar'] != null && baselines['mar']! > 0) {
       _marThreshold = baselines['mar']!;
     }
-
-    if (mounted) setState(() {});
   }
 
-  Future<void> _initializeCamera() async {
-    if (_cameraController != null) return;
+  // ----------------------------------------------------------------------
+  // 1. iOS ARKit Implementation
+  // ----------------------------------------------------------------------
 
-    final cameras = await availableCameras();
-    if (cameras.isEmpty) {
-      if (mounted) setState(() => _drowsinessStatus = "No Camera");
-      return;
+  Widget _buildIOSView() {
+    return ARKitSceneView(
+      configuration: ARKitConfiguration.faceTracking,
+      onARKitViewCreated: _onARViewCreated,
+    );
+  }
+
+  void _onARViewCreated(ARKitController controller) {
+    _arController = controller;
+    _arController!.onAddNodeForAnchor = _handleAddAnchor;
+    _arController!.onUpdateNodeForAnchor = _handleUpdateAnchor;
+  }
+
+  void _handleAddAnchor(ARKitAnchor anchor) {
+    if (anchor is! ARKitFaceAnchor) return;
+
+    // Visual Mesh Feedback
+    final material = ARKitMaterial(
+      fillMode: ARKitFillMode.lines,
+      diffuse: ARKitMaterialProperty.color(
+          _isAlerting ? Colors.red.withOpacity(0.6) : Colors.greenAccent.withOpacity(0.4)
+      ),
+    );
+
+    anchor.geometry.materials.value = [material];
+
+    _faceNode = ARKitNode(geometry: anchor.geometry);
+    _arController!.add(_faceNode!, parentNodeName: anchor.nodeName);
+  }
+
+  void _handleUpdateAnchor(ARKitAnchor anchor) {
+    if (anchor is ARKitFaceAnchor) {
+
+      // 1. Update Visual Mesh Geometry
+      if (_faceNode != null) {
+        _arController!.updateFaceGeometry(_faceNode!, anchor.identifier);
+
+        // Update color if alerting
+        final color = _isAlerting ? Colors.red.withOpacity(0.6) : Colors.greenAccent.withOpacity(0.4);
+        // Note: ARKitPlugin materials might need re-assignment or property update depending on version,
+        // but geometry update is the critical part for movement.
+      }
+
+      // 2. Monitoring Logic
+      if (_isMonitoring) {
+        final shapes = anchor.blendShapes;
+        final leftBlink = shapes['eyeBlink_L'] ?? 0.0;
+        final rightBlink = shapes['eyeBlink_R'] ?? 0.0;
+        final jawOpen = shapes['jawOpen'] ?? 0.0;
+
+        double pitch = 0.0; // Simplify pitch for ARKit
+
+        final state = DriverState(
+          leftEyeOpenProbability: 1.0 - leftBlink,
+          rightEyeOpenProbability: 1.0 - rightBlink,
+          mouthOpenness: jawOpen,
+          headPitch: pitch,
+          headYaw: 0,
+          isFaceDetected: true,
+        );
+
+        _processUnifiedState(state);
+      }
     }
+  }
+
+  // ----------------------------------------------------------------------
+  // 2. Android / Fallback Implementation (Camera + ML Kit)
+  // ----------------------------------------------------------------------
+
+  Future<void> _initializeCamera() async {
+    final cameras = await availableCameras();
+    if (cameras.isEmpty) return;
 
     final frontCamera = cameras.firstWhere(
           (c) => c.lensDirection == CameraLensDirection.front,
@@ -105,57 +178,11 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
       imageFormatGroup: Platform.isIOS ? ImageFormatGroup.bgra8888 : ImageFormatGroup.nv21,
     );
 
-    try {
-      await controller.initialize();
-      if (!mounted) return;
+    await controller.initialize();
+    if (!mounted) return;
 
-      await controller.startImageStream(_processCameraImage);
-
-      setState(() => _cameraController = controller);
-    } catch (e) {
-      debugPrint("Camera Init Error: $e");
-    }
-  }
-
-  Future<void> _stopCamera() async {
-    final controller = _cameraController;
-    if (mounted) {
-      setState(() {
-        _cameraController = null;
-        _customPaint = null;
-      });
-    }
-
-    if (controller != null) {
-      try {
-        if (controller.value.isStreamingImages) {
-          await controller.stopImageStream();
-        }
-      } catch (e) {
-        debugPrint("Error stopping stream: $e");
-      }
-      await controller.dispose();
-    }
-  }
-
-  void _startMonitoring() {
-    _fusionEngine.reset();
-    setState(() {
-      _isMonitoring = true;
-      _drowsinessStatus = "Monitoring...";
-      _currentScore = 0.0;
-    });
-  }
-
-  void _stopMonitoring() {
-    _stopAlert();
-    setState(() {
-      _isMonitoring = false;
-      _drowsinessStatus = "Session Paused";
-      _isAlerting = false;
-      _currentPerclos = 0.0;
-      _currentScore = 0.0;
-    });
+    await controller.startImageStream(_processCameraImage);
+    setState(() => _cameraController = controller);
   }
 
   void _processCameraImage(CameraImage image) async {
@@ -164,116 +191,159 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
 
     try {
       if (_cameraController == null) return;
-
       final inputImage = _prepareInputImage(image);
       if (inputImage == null) return;
 
-      final faces = await _faceDetectorService.processImage(inputImage);
+      DriverState? driverState;
+      CustomPaint? newPaint;
 
-      if (faces.isNotEmpty) {
-        final face = faces.first;
+      // A. Try Face Mesh (Android Priority)
+      if (Platform.isAndroid) {
+        final meshes = await _meshService.processImage(inputImage);
+        if (meshes.isNotEmpty) {
+          final mesh = meshes.first;
+          driverState = _meshService.mapToDriverState(mesh);
 
-        final double currentEar = DrowsinessLogic.calculateEAR(face);
-        final double mar = DrowsinessLogic.calculateMAR(face);
-        final double pitch = face.headEulerAngleX ?? 0.0;
+          newPaint = CustomPaint(
+            painter: FaceMeshPainter(
+              meshes,
+              inputImage.metadata!.size,
+              inputImage.metadata!.rotation,
+              CameraLensDirection.front,
+              _isAlerting,
+            ),
+          );
+        }
+      }
 
-        if (_isMonitoring) {
-          final result = _fusionEngine.processFrame(
-            currentEar: currentEar,
-            headPitch: pitch,
-            mar: mar,
-            earThreshold: _baselineEarThreshold,
-            marThreshold: _marThreshold,
+      // B. Fallback to Legacy Detector
+      if (driverState == null) {
+        final faces = await _legacyService.processImage(inputImage);
+        if (faces.isNotEmpty) {
+          final face = faces.first;
+          double ear = DrowsinessLogic.calculateEAR(face);
+          double mar = DrowsinessLogic.calculateLegacyMAR(face);
+
+          double simProb = ear / 0.35;
+          if (simProb > 1.0) simProb = 1.0;
+
+          driverState = DriverState(
+            leftEyeOpenProbability: simProb,
+            rightEyeOpenProbability: simProb,
+            mouthOpenness: mar,
+            headPitch: face.headEulerAngleX ?? 0.0,
+            headYaw: 0,
+            isFaceDetected: true,
           );
 
-          final bool shouldAlert = result['alert'] as bool;
-          final double score = result['score'] ?? 0.0; // Get Score
-
-          if (mounted) {
-            setState(() {
-              _drowsinessStatus = result['status'] as String;
-              _isAlerting = shouldAlert;
-              _currentPerclos = result['perclos'] ?? 0.0;
-              _isOccluded = result['isOccluded'] ?? false;
-              _currentScore = score;
-
-              _debugMar = result['smoothedMar'] ?? 0.0;
-              _debugPitch = result['smoothedPitch'] ?? 0.0;
-              _debugEar = result['smoothedEar'] ?? 0.0;
-            });
-
-            if (shouldAlert) {
-              _triggerAlert();
-            } else {
-              _stopAlert();
-            }
-          }
-        } else {
-          if (mounted) {
-            setState(() {
-              _debugMar = mar;
-              _debugPitch = pitch;
-              _debugEar = currentEar;
-            });
-          }
+          newPaint = CustomPaint(
+            painter: FaceDetectorPainter(
+              faces,
+              inputImage.metadata!.size,
+              inputImage.metadata!.rotation,
+              CameraLensDirection.front,
+              _isAlerting,
+            ),
+          );
         }
-
-        final painter = FaceDetectorPainter(
-          faces,
-          inputImage.metadata!.size,
-          inputImage.metadata!.rotation,
-          CameraLensDirection.front,
-          _isAlerting,
-        );
-
-        if (mounted) {
-          setState(() => _customPaint = CustomPaint(painter: painter));
-        }
-      } else {
-        if (mounted) setState(() => _customPaint = null);
       }
+
+      if (mounted) {
+        setState(() => _customPaint = newPaint);
+        if (driverState != null && _isMonitoring) {
+          _processUnifiedState(driverState);
+        } else if (driverState == null && _isMonitoring) {
+          _processUnifiedState(DriverState.empty());
+        }
+      }
+
     } catch (e) {
-      debugPrint("Processing error: $e");
+      debugPrint("Error processing frame: $e");
     } finally {
       _isProcessing = false;
     }
   }
 
+  // ----------------------------------------------------------------------
+  // 3. Central Logic Processor
+  // ----------------------------------------------------------------------
+
+  void _processUnifiedState(DriverState state) {
+    final result = _fusionEngine.processState(
+      state: state,
+      earThreshold: _baselineEarThreshold,
+      marThreshold: _marThreshold,
+    );
+
+    setState(() {
+      _drowsinessStatus = result['status'];
+      _currentScore = result['score'];
+      _isAlerting = result['alert'];
+
+      _debugEar = result['smoothedEar'];
+      _debugMar = result['smoothedMar'];
+      _debugPitch = result['smoothedPitch'];
+    });
+
+    if (_isAlerting) {
+      _triggerAlert();
+    } else {
+      _stopAlert();
+    }
+  }
+
+  // ----------------------------------------------------------------------
+  // 4. UI & Lifecycle
+  // ----------------------------------------------------------------------
+
+  void _startMonitoring() {
+    _fusionEngine.reset();
+    setState(() {
+      _isMonitoring = true;
+      _currentScore = 0.0;
+      _drowsinessStatus = "Active Monitoring";
+    });
+  }
+
+  void _stopMonitoring() {
+    _stopAlert();
+    setState(() {
+      _isMonitoring = false;
+      _currentScore = 0.0;
+      _drowsinessStatus = "Paused";
+    });
+  }
+
   Future<void> _triggerAlert() async {
     if (await Vibration.hasVibrator() ?? false) {
-      Vibration.vibrate(pattern: [500, 1000, 500, 1000], intensities: [1, 255]);
+      Vibration.vibrate(pattern: [500, 500, 500, 500], intensities: [255, 255]);
     }
-
     if (_audioPlayer.state != PlayerState.playing) {
-      try {
-        await _audioPlayer.play(AssetSource('sounds/alarm.mp3'));
-      } catch (e) {
-        debugPrint("Audio Play Error: $e");
-      }
+      _audioPlayer.play(AssetSource('sounds/alarm.mp3'));
     }
   }
 
   Future<void> _stopAlert() async {
     if (_audioPlayer.state == PlayerState.playing) {
-      await _audioPlayer.stop();
+      _audioPlayer.stop();
     }
     Vibration.cancel();
   }
 
-  void _dismissAndReset() {
-    _stopAlert();
-    _fusionEngine.reset();
-    setState(() {
-      _isAlerting = false;
-      _drowsinessStatus = "Monitoring Resumed";
-      _currentScore = 0.0;
-    });
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _cameraController?.dispose();
+    _arController?.dispose();
+    _legacyService.dispose();
+    _meshService.dispose();
+    _audioPlayer.dispose();
+    super.dispose();
   }
 
   InputImage? _prepareInputImage(CameraImage image) {
     if (_cameraController == null) return null;
     final plane = image.planes.first;
-
     return InputImage.fromBytes(
       bytes: plane.bytes,
       metadata: InputImageMetadata(
@@ -286,185 +356,105 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
   }
 
   @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _stopCamera();
-    _faceDetectorService.dispose();
-    _audioPlayer.dispose();
-    super.dispose();
-  }
-
-  Future<void> _safeNavigate(Widget destination) async {
-    _stopMonitoring();
-    await _stopCamera();
-
-    if (!mounted) return;
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => destination),
-    );
-
-    await Future.delayed(const Duration(milliseconds: 200));
-    await _loadSettings();
-    await _initializeCamera();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final bool isCameraReady = _cameraController != null && _cameraController!.value.isInitialized;
+    Widget bodyContent;
 
-    if (!isCameraReady) {
-      return const Scaffold(
-          backgroundColor: Colors.black,
-          body: Center(child: CircularProgressIndicator())
-      );
+    if (_useArKit) {
+      bodyContent = _buildIOSView();
+    } else {
+      if (_cameraController == null || !_cameraController!.value.isInitialized) {
+        bodyContent = const Center(child: CircularProgressIndicator());
+      } else {
+        final size = MediaQuery.of(context).size;
+        var scale = size.aspectRatio * _cameraController!.value.aspectRatio;
+        if (scale < 1) scale = 1 / scale;
+
+        bodyContent = Transform.scale(
+          scale: scale,
+          child: Center(
+            child: CameraPreview(_cameraController!, child: _customPaint),
+          ),
+        );
+      }
     }
-
-    final size = MediaQuery.of(context).size;
-    var scale = size.aspectRatio * _cameraController!.value.aspectRatio;
-    if (scale < 1) scale = 1 / scale;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Driver Guardian"),
-        elevation: 0,
+        title: Text(_useArKit ? "Driver Guardian (AR)" : "Driver Guardian (Mesh)"),
         backgroundColor: _isAlerting ? Colors.red : Colors.blueAccent,
         actions: [
           IconButton(
             icon: const Icon(Icons.person),
-            tooltip: "Driver Profile",
-            onPressed: () => _safeNavigate(const ProfileView()),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (c) => const ProfileView())),
           ),
           IconButton(
-            icon: const Icon(Icons.settings_accessibility),
-            onPressed: () => _safeNavigate(const CalibrationView()),
+            icon: const Icon(Icons.settings),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (c) => const CalibrationView())),
           ),
         ],
       ),
       body: Stack(
         fit: StackFit.expand,
         children: [
-          Transform.scale(
-            scale: scale,
-            child: Center(
-              child: CameraPreview(_cameraController!, child: _customPaint),
-            ),
-          ),
-
+          bodyContent,
           Positioned(
             bottom: 30,
             left: 20,
             right: 20,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-              decoration: BoxDecoration(
-                color: _isAlerting ? Colors.red.withOpacity(0.9) : Colors.black87,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    _drowsinessStatus.toUpperCase(),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
-                  ),
-                  // Display Score if monitoring
-                  if (_isMonitoring)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4.0),
-                      child: Text(
-                        "Risk Score: ${_currentScore.toInt()}",
-                        style: TextStyle(
-                            color: _currentScore > 75 ? Colors.orange : Colors.grey,
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold
-                        ),
-                      ),
-                    ),
-                  const SizedBox(height: 12),
-
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: [
-                      _buildMetric(
-                          "EAR",
-                          "${_debugEar.toStringAsFixed(2)} / ${_baselineEarThreshold.toStringAsFixed(2)}"
-                      ),
-                      _buildMetric(
-                          "MAR",
-                          "${_debugMar.toStringAsFixed(2)} / ${_marThreshold.toStringAsFixed(2)}"
-                      ),
-                      _buildMetric(
-                          "PITCH",
-                          "${_debugPitch.toInt()}°"
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  if (_isAlerting)
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: _dismissAndReset,
-                        icon: const Icon(Icons.notifications_off),
-                        label: const Text("DISMISS & RESET"),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: Colors.red,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    )
-                  else if (!_isMonitoring)
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: _startMonitoring,
-                        icon: const Icon(Icons.play_circle_filled),
-                        label: const Text(
-                            "START MONITORING",
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    )
-                  else
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: _stopMonitoring,
-                        icon: const Icon(Icons.stop_circle),
-                        label: const Text("STOP MONITORING"),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.grey[800],
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+            child: _buildHud(),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildMetric(String label, String value) {
+  Widget _buildHud() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _isAlerting ? Colors.red.withOpacity(0.9) : Colors.black87,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            _drowsinessStatus,
+            style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _statItem("EAR", _debugEar.toStringAsFixed(2)),
+              _statItem("MAR", _debugMar.toStringAsFixed(2)),
+              _statItem("SCORE", _currentScore.toInt().toString()),
+            ],
+          ),
+          const SizedBox(height: 20),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _isMonitoring ? _stopMonitoring : _startMonitoring,
+              icon: Icon(_isMonitoring ? Icons.stop : Icons.play_arrow),
+              label: Text(_isMonitoring ? "STOP MONITORING" : "START MONITORING"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _isMonitoring ? Colors.grey : Colors.green,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _statItem(String label, String value) {
     return Column(
       children: [
         Text(label, style: const TextStyle(color: Colors.grey, fontSize: 10)),
-        const SizedBox(height: 4),
-        Text(value, style: const TextStyle(color: Colors.white, fontSize: 16, fontFamily: "Monospace")),
+        Text(value, style: const TextStyle(color: Colors.white, fontSize: 16, fontFamily: 'Monospace')),
       ],
     );
   }
