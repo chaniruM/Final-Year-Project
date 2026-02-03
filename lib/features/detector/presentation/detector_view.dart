@@ -267,51 +267,6 @@ class _DetectorViewState extends State<DetectorView> with WidgetsBindingObserver
     }
   }
 
-  // @override
-  // Widget build(BuildContext context) {
-  //   if (!_capabilityCheckDone) return const Scaffold(backgroundColor: Colors.black, body: Center(child: CircularProgressIndicator()));
-  //
-  //   return Scaffold(
-  //     appBar: AppBar(
-  //       title: const Text("Driver Guardian"),
-  //       backgroundColor: _isAlerting ? Colors.red : Colors.blueAccent,
-  //       actions: [
-  //         IconButton(icon: const Icon(Icons.person), onPressed: () => _safeNavigate(const ProfileView())),
-  //         IconButton(icon: const Icon(Icons.settings_accessibility), onPressed: () => _safeNavigate(const CalibrationView())),
-  //       ],
-  //     ),
-  //     body: Stack(
-  //       fit: StackFit.expand,
-  //       children: [
-  //         if (_useARKit)
-  //           ARKitSceneView(key: _arKitKey, configuration: ARKitConfiguration.faceTracking, onARKitViewCreated: _onARKitViewCreated, enableTapRecognizer: false)
-  //         else if (_cameraController != null && _cameraController!.value.isInitialized)
-  //           CameraPreview(_cameraController!, child: _customPaint)
-  //         else
-  //           const Center(child: CircularProgressIndicator()),
-  //
-  //         Positioned(
-  //           bottom: 30, left: 20, right: 20,
-  //           child: DetectorStatusPanel(
-  //             status: _drowsinessStatus,
-  //             score: _currentScore,
-  //             isMonitoring: _isMonitoring,
-  //             isAlerting: _isAlerting,
-  //             debugEar: _debugEar,
-  //             baselineEar: _baselineEarThreshold,
-  //             debugMar: _debugMar,
-  //             baselineMar: _marThreshold,
-  //             debugPitch: _debugPitch,
-  //             onStart: () { _fusionEngine.reset(); setState(() => _isMonitoring = true); },
-  //             onStop: () { _stopAlert(); setState(() { _isMonitoring = false; _isAlerting = false; _drowsinessStatus = "Paused"; }); },
-  //             onDismiss: () { _stopAlert(); _fusionEngine.reset(); setState(() { _isAlerting = false; _drowsinessStatus = "Resumed"; }); },
-  //           ),
-  //         ),
-  //       ],
-  //     ),
-  //   );
-  // }
-
   @override
   Widget build(BuildContext context) {
     if (!_capabilityCheckDone) {
