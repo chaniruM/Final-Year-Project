@@ -5,13 +5,13 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'coordinates_translator.dart';
 
 class FaceDetectorPainter extends CustomPainter {
-  FaceDetectorPainter(
-      this.faces,
-      this.imageSize,
-      this.rotation,
-      this.cameraLensDirection,
-      this.isAlerting,
-      );
+  FaceDetectorPainter({
+    required this.faces,
+    required this.imageSize,
+    required this.rotation,
+    required this.cameraLensDirection,
+    this.isAlerting = false,
+  });
 
   final List<Face> faces;
   final Size imageSize;
@@ -50,9 +50,11 @@ class FaceDetectorPainter extends CustomPainter {
     // Helper to mirror the X-coordinate for front camera
     double transformX(double x) {
       double tx = translateX(x, size, imageSize, rotation, cameraLensDirection);
-      if (cameraLensDirection == CameraLensDirection.front) {
-        return size.width - tx;
-      }
+
+      // FIX: The previous logic subtracted 'tx' from 'size.width' for the front camera.
+      // However, the standard translateX implementation for rotation270deg (Android front cam)
+      // often already returns a flipped coordinate. Doing it again un-mirrors it.
+      // By returning 'tx' directly, we respect the translator's output which aligns with the view.
       return tx;
     }
 
@@ -140,8 +142,6 @@ class FaceDetectorPainter extends CustomPainter {
         }
 
         // --- B. Width Points (Cyan) ---
-        // Use the corners of the INNER lower lip to match the visual style
-        // Or Outer, but keeping consistent with what we had
         final p1 = lowerInner.first;
         final p2 = lowerInner.last;
 
