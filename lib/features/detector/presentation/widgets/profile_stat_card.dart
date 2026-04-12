@@ -4,12 +4,14 @@ class ProfileStatCard extends StatelessWidget {
   final double? earThreshold;
   final double? marThreshold;
   final double? perclosBaseline;
+  final double? baselinePitch;
 
   const ProfileStatCard({
     super.key,
     required this.earThreshold,
     required this.marThreshold,
     required this.perclosBaseline,
+    required this.baselinePitch,
   });
 
   @override
@@ -51,6 +53,15 @@ class ProfileStatCard extends StatelessWidget {
                   ? "${(perclosBaseline! * 100).toStringAsFixed(1)}%"
                   : "5.0%",
               desc: "Your normal blinking rate.",
+            ),
+            const SizedBox(height: 20),
+            _buildRow(
+              icon: Icons.screen_rotation,
+              label: "Resting Pitch",
+              value: baselinePitch != null
+                  ? "${baselinePitch!.toStringAsFixed(1)}°"
+                  : "0.0°",
+              desc: "Your normal head posture angle.",
             ),
           ],
         ),

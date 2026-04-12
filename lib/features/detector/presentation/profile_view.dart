@@ -17,6 +17,7 @@ class _ProfileViewState extends State<ProfileView> {
   double? _earThreshold;
   double? _perclosBaseline;
   double? _marThreshold;
+  double? _baselinePitch;
   String _statusMessage = "Loading...";
 
   @override
@@ -31,6 +32,7 @@ class _ProfileViewState extends State<ProfileView> {
       _earThreshold = baselines['threshold'];
       _perclosBaseline = baselines['perclos'];
       _marThreshold = baselines['mar'];
+      _baselinePitch = baselines['pitch'];
       _isLoading = false;
 
       if (_earThreshold == null || _earThreshold == 0.0) {
@@ -88,6 +90,7 @@ class _ProfileViewState extends State<ProfileView> {
               earThreshold: _earThreshold,
               marThreshold: _marThreshold,
               perclosBaseline: _perclosBaseline,
+              baselinePitch: _baselinePitch,
             ),
             const SizedBox(height: 30),
             SizedBox(

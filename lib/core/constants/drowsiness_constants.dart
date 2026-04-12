@@ -7,9 +7,19 @@ class DrowsinessConstants {
   static const double yawnMarThreshold = 0.4;
   static const double headNodPitchThreshold = -15.0;
 
-  // PERCLOS Settings
-  static const int perclosWindowFrames = 900;
+  // PERCLOS Settings (Time-Based)
+  static const Duration perclosWindowDuration = Duration(seconds: 60);
   static const double perclosTolerance = 0.15;
+  
+  // Microsleep Settings
+  static const int microsleepDurationMs = 1500; // 1.5 seconds
+
+  // Continuous Event Settings
+  static const int headDroopDurationMs = 2000; // 2 seconds
+  static const int yawnDurationMs = 3000; // 3 seconds
+  static const Duration yawnHistoryWindow = Duration(minutes: 5);
+  static const int frequentYawnCount = 3;
+  static const double frequentYawnPenalty = 50.0;
 
   // --- SCORING WEIGHTS (Normal Mode) ---
   static const double weightEyes = 60.0;

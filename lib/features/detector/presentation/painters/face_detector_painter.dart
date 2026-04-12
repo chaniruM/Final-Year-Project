@@ -10,21 +10,25 @@ class FaceDetectorPainter extends CustomPainter {
     required this.imageSize,
     required this.rotation,
     required this.cameraLensDirection,
-    this.isAlerting = false,
+    this.alertLevel = 0,
   });
 
   final List<Face> faces;
   final Size imageSize;
   final InputImageRotation rotation;
   final CameraLensDirection cameraLensDirection;
-  final bool isAlerting;
+  final int alertLevel;
 
   @override
   void paint(Canvas canvas, Size size) {
+    Color boxColor = Colors.greenAccent;
+    if (alertLevel == 2) boxColor = Colors.red;
+    if (alertLevel == 1) boxColor = Colors.orange;
+
     final Paint paint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.0
-      ..color = isAlerting ? Colors.red : Colors.greenAccent;
+      ..color = boxColor;
 
     // Paint for the height points (Yellow) - INNER Lips
     final Paint heightPointPaint = Paint()
@@ -50,11 +54,6 @@ class FaceDetectorPainter extends CustomPainter {
     // Helper to mirror the X-coordinate for front camera
     double transformX(double x) {
       double tx = translateX(x, size, imageSize, rotation, cameraLensDirection);
-
-      // FIX: The previous logic subtracted 'tx' from 'size.width' for the front camera.
-      // However, the standard translateX implementation for rotation270deg (Android front cam)
-      // often already returns a flipped coordinate. Doing it again un-mirrors it.
-      // By returning 'tx' directly, we respect the translator's output which aligns with the view.
       return tx;
     }
 
@@ -163,6 +162,6 @@ class FaceDetectorPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(FaceDetectorPainter oldDelegate) {
-    return oldDelegate.isAlerting != isAlerting || oldDelegate.faces != faces;
+    return oldDelegate.alertLevel != alertLevel || oldDelegate.faces != faces;
   }
 }

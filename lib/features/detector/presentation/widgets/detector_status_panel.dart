@@ -4,7 +4,7 @@ class DetectorStatusPanel extends StatelessWidget {
   final String status;
   final double score;
   final bool isMonitoring;
-  final bool isAlerting;
+  final int alertLevel;
   final double debugEar;
   final double baselineEar;
   final double debugMar;
@@ -19,7 +19,7 @@ class DetectorStatusPanel extends StatelessWidget {
     required this.status,
     required this.score,
     required this.isMonitoring,
-    required this.isAlerting,
+    required this.alertLevel,
     required this.debugEar,
     required this.baselineEar,
     required this.debugMar,
@@ -32,10 +32,14 @@ class DetectorStatusPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Color bgColor = Colors.black87;
+    if (alertLevel == 2) bgColor = Colors.red.withOpacity(0.9);
+    if (alertLevel == 1) bgColor = Colors.orange.withOpacity(0.9);
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
       decoration: BoxDecoration(
-        color: isAlerting ? Colors.red.withOpacity(0.9) : Colors.black87,
+        color: bgColor,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
@@ -55,7 +59,7 @@ class DetectorStatusPanel extends StatelessWidget {
               child: Text(
                 "Risk Score: ${score.toInt()}",
                 style: TextStyle(
-                    color: score > 75 ? Colors.orange : Colors.grey,
+                    color: score > 75 ? Colors.white70 : Colors.grey,
                     fontSize: 14,
                     fontWeight: FontWeight.bold),
               ),
@@ -75,13 +79,13 @@ class DetectorStatusPanel extends StatelessWidget {
 
           const SizedBox(height: 20),
 
-          if (isAlerting)
+          if (alertLevel > 0)
             _buildButton(
               onPressed: onDismiss,
               icon: Icons.notifications_off,
               label: "DISMISS & RESET",
               bgColor: Colors.white,
-              fgColor: Colors.red,
+              fgColor: alertLevel == 2 ? Colors.red : Colors.orange,
             )
           else if (!isMonitoring)
             _buildButton(
@@ -107,7 +111,7 @@ class DetectorStatusPanel extends StatelessWidget {
   Widget _buildMetric(String label, String value) {
     return Column(
       children: [
-        Text(label, style: const TextStyle(color: Colors.grey, fontSize: 10)),
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10)),
         const SizedBox(height: 4),
         Text(value,
             style: const TextStyle(
