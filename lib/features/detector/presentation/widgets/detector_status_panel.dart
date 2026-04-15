@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 
 class DetectorStatusPanel extends StatelessWidget {
@@ -32,17 +33,29 @@ class DetectorStatusPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Color bgColor = Colors.black87;
-    if (alertLevel == 2) bgColor = Colors.red.withOpacity(0.9);
-    if (alertLevel == 1) bgColor = Colors.orange.withOpacity(0.9);
+    Color bgColor = Colors.black;
+    if (alertLevel == 2) bgColor = Colors.red;
+    if (alertLevel == 1) bgColor = Colors.orange;
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          decoration: BoxDecoration(
+            color: bgColor.withOpacity(alertLevel > 0 ? 0.6 : 0.4),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withOpacity(0.15), width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 10,
+                spreadRadius: 2,
+              )
+            ],
+          ),
+          child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
@@ -59,7 +72,7 @@ class DetectorStatusPanel extends StatelessWidget {
               child: Text(
                 "Risk Score: ${score.toInt()}",
                 style: TextStyle(
-                    color: score > 75 ? Colors.white70 : Colors.grey,
+                    color: score > 75 ? Colors.redAccent : Colors.cyanAccent,
                     fontSize: 14,
                     fontWeight: FontWeight.bold),
               ),
@@ -100,10 +113,12 @@ class DetectorStatusPanel extends StatelessWidget {
               onPressed: onStop,
               icon: Icons.stop_circle,
               label: "STOP MONITORING",
-              bgColor: Colors.grey[800]!,
+              bgColor: Colors.white12,
               fgColor: Colors.white,
             ),
-        ],
+          ],
+        ),
+      ),
       ),
     );
   }
@@ -141,7 +156,10 @@ class DetectorStatusPanel extends StatelessWidget {
         style: ElevatedButton.styleFrom(
           backgroundColor: bgColor,
           foregroundColor: fgColor,
-          padding: const EdgeInsets.symmetric(vertical: 12),
+          elevation: alertLevel > 0 ? 8 : 0,
+          shadowColor: bgColor.withOpacity(0.5),
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
         ),
       ),
     );

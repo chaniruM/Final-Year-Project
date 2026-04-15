@@ -42,6 +42,9 @@ class DrowsinessConstants {
     final rightEye = face.contours[FaceContourType.rightEye]?.points;
 
     if (leftEye == null || rightEye == null || leftEye.length < 3 || rightEye.length < 3) {
+      if (face.leftEyeOpenProbability == null && face.rightEyeOpenProbability == null) {
+        return -1.0; // Eyes completely occluded
+      }
       double prob = ((face.leftEyeOpenProbability ?? 0.5) + (face.rightEyeOpenProbability ?? 0.5)) / 2;
       return prob * 0.5;
     }
@@ -99,7 +102,9 @@ class DrowsinessConstants {
 
   // --- ARKIT METHODS ---
 
-  static double calculateArKitEAR(double eyeBlinkLeft, double eyeBlinkRight) {
+  static double calculateArKitEAR(double eyeBlinkLeft, double eyeBlinkRight, {bool isTracked = true}) {
+    if (!isTracked) return -1.0; // Mesh is fully lost
+    
     // ARKit returns 0.0 for open, 1.0 for closed.
     // We invert this to match EAR logic (High = Open, Low = Closed).
     double avgBlink = (eyeBlinkLeft + eyeBlinkRight) / 2.0;

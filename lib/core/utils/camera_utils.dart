@@ -32,7 +32,8 @@ class CameraUtils {
 
     final controller = CameraController(
       frontCamera,
-      ResolutionPreset.medium,
+      ResolutionPreset.high,
+      // ResolutionPreset.veryHigh,
       enableAudio: false,
       imageFormatGroup: Platform.isIOS ? ImageFormatGroup.bgra8888 : ImageFormatGroup.nv21,
     );
