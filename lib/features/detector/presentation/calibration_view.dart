@@ -53,6 +53,7 @@ class _CalibrationViewState extends State<CalibrationView> {
   CustomPaint? _customPaint;
   
   int _frameCount = 0;
+  DateTime? _lastFaceDetectedTime;
 
   @override
   void initState() {
@@ -117,6 +118,7 @@ class _CalibrationViewState extends State<CalibrationView> {
       _capturedPitchValues.clear();
       _frameCount = 0;
       _message = "Keep eyes OPEN. Mouth CLOSED (Neutral).";
+      _lastFaceDetectedTime = DateTime.now();
     });
 
     Timer.periodic(const Duration(seconds: 1), (timer) async {
@@ -124,6 +126,18 @@ class _CalibrationViewState extends State<CalibrationView> {
         timer.cancel();
         if (_isCalibrating) _finishCalibration();
       } else {
+        if (_lastFaceDetectedTime != null && DateTime.now().difference(_lastFaceDetectedTime!).inSeconds >= 3) {
+          timer.cancel();
+          if (mounted) {
+            setState(() {
+              _isCalibrating = false;
+              _customPaint = null;
+              _capturedEarValues.clear();
+              _message = "Calibration Aborted. Face lost for > 3 Seconds.";
+            });
+          }
+          return;
+        }
         setState(() => _timerCount--);
       }
     });
@@ -159,6 +173,7 @@ class _CalibrationViewState extends State<CalibrationView> {
           );
 
           if (_isCalibrating) {
+            _lastFaceDetectedTime = DateTime.now();
             if (ear > 0.0) _capturedEarValues.add(ear);
             if (mar > 0.0) _capturedMarValues.add(mar);
             _capturedPitchValues.add(pitch);
@@ -218,6 +233,7 @@ class _CalibrationViewState extends State<CalibrationView> {
       final pitch = _getPitchFromTransform(anchor.transform);
 
       if (_isCalibrating) {
+        _lastFaceDetectedTime = DateTime.now();
         _capturedEarValues.add(ear);
         _capturedMarValues.add(mar);
         _capturedPitchValues.add(pitch);
@@ -490,14 +506,16 @@ class _CalibrationViewState extends State<CalibrationView> {
           children: [
             backgroundLayer,
 
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 80,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: _buildTrackingModeSwitcher(),
+            // Only show the toggle if the device actually has TrueDepth/ARKit capabilities
+            if (_isARKitSupported)
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 80,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: _buildTrackingModeSwitcher(),
+                ),
               ),
-            ),
             
             if (_isOccluded && _isCalibrating)
               Positioned(

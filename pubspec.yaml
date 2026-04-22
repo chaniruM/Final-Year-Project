@@ -46,3 +46,6 @@ flutter_launcher_icons:
   ios: true
   image_path: "assets/icon.png" # Path to your icon file
   min_sdk_android: 21 # match your build.gradle minSdk
+
+# dependency_overrides:
+#   vector_math: ^2.1.4

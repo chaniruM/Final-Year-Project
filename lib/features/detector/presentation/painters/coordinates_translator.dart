@@ -3,6 +3,8 @@ import 'dart:ui';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 
+/// Translator utility to map absolute coordinates from the camera image stream 
+/// to the dynamic widget canvas size on the device screen.
 double translateX(
     double x,
     Size canvasSize,
@@ -10,24 +12,33 @@ double translateX(
     InputImageRotation rotation,
     CameraLensDirection cameraLensDirection,
     ) {
-  double translatedX;
+  double scaledX;
+  
   switch (rotation) {
     case InputImageRotation.rotation90deg:
-      translatedX = x * canvasSize.width / (Platform.isIOS ? imageSize.width : imageSize.height);
-      break;
     case InputImageRotation.rotation270deg:
-      translatedX = canvasSize.width - x * canvasSize.width / (Platform.isIOS ? imageSize.width : imageSize.height);
+      scaledX = x * canvasSize.width / (Platform.isIOS ? imageSize.width : imageSize.height);
       break;
     case InputImageRotation.rotation0deg:
     case InputImageRotation.rotation180deg:
-      translatedX = x * canvasSize.width / imageSize.width;
+    default:
+      scaledX = x * canvasSize.width / imageSize.width;
       break;
   }
 
   if (cameraLensDirection == CameraLensDirection.front) {
-    return canvasSize.width - translatedX;
+    // Platform-Specific Sensor Mirroring
+    // Apple iOS natively pre-mirrors the raw BGRA8888 camera buffers at the OS level.
+    // Android natively outputs raw, unmirrored NV21 buffers.
+    // Therefore, we apply mathematical X-axis mirroring ONLY on non-iOS devices.
+    if (!Platform.isIOS) {
+      return canvasSize.width - scaledX; 
+    } else {
+      return scaledX; 
+    }
   }
-  return translatedX;
+  
+  return scaledX;
 }
 
 double translateY(

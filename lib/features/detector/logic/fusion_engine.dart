@@ -1,5 +1,4 @@
 import 'dart:collection';
-import 'dart:math' as math;
 import '../../../core/constants/drowsiness_constants.dart';
 import '../../../core/utils/signal_smoother.dart';
 
@@ -11,7 +10,6 @@ class FrameData {
 
 class FusionEngine {
   final Queue<FrameData> _timeBuffer = Queue<FrameData>();
-  final Queue<double> _earVarianceBuffer = Queue<double>();
 
   final SignalSmoother _earSmoother = SignalSmoother(windowSize: 3);
   final SignalSmoother _pitchSmoother = SignalSmoother(windowSize: 8);
@@ -19,8 +17,8 @@ class FusionEngine {
 
   double _baselinePerclos = 0.0;
   DateTime? _lastEyesDetectedTime;
-  DateTime? _blinkStartTime; // Tracks continuous closure for microsleeps
   
+  DateTime? _blinkStartTime; // Tracks continuous closure for microsleeps
   DateTime? _droopStartTime; // Tracks continuous head droop
   DateTime? _yawnStartTime; // Tracks continuous yawn
   final List<DateTime> _verifiedYawns = []; // Keeps a history of yawns
@@ -36,7 +34,6 @@ class FusionEngine {
 
   void reset() {
     _timeBuffer.clear();
-    _earVarianceBuffer.clear();
     _earSmoother.reset();
     _pitchSmoother.reset();
     _marSmoother.reset();
@@ -53,61 +50,39 @@ class FusionEngine {
     required double mar,
     required double earThreshold,
     required double marThreshold,
-    required double baselinePitch, // Added to receive relative setup
+    required double baselinePitch, 
   }) {
     final now = DateTime.now();
 
-    // 0. ARKit Variance Flatline Check
-    if (currentEar >= 0.0) {
-      _earVarianceBuffer.add(currentEar);
-      if (_earVarianceBuffer.length > 60) _earVarianceBuffer.removeFirst();
-    }
-
-    bool isFlatlined = false;
-    if (_earVarianceBuffer.length >= 60) {
-      double mean = _earVarianceBuffer.reduce((a, b) => a + b) / _earVarianceBuffer.length;
-      double variance = _earVarianceBuffer.map((e) => math.pow(e - mean, 2)).reduce((a, b) => a + b) / _earVarianceBuffer.length;
-      if (variance < 0.0000001) { // Practically zero variance translates to forced ARKit guessing
-        isFlatlined = true;
-      }
-    }
-
-    bool isValidEAR = currentEar >= 0.0 && !isFlatlined;
-
-    // 1. Smooth Inputs
-    double sEar = isValidEAR ? _earSmoother.smooth(currentEar) : -1.0;
+    // 1. Smooth Inputs (Ignore -1.0 occlusions so we don't break the smoothing buffer)
+    double sEar = currentEar >= 0.0 ? _earSmoother.smooth(currentEar) : -1.0;
     double sPitch = _pitchSmoother.smooth(headPitch);
-    double sMar = _marSmoother.smooth(mar);
+    double sMar = mar >= 0.0 ? _marSmoother.smooth(mar) : -1.0;
 
-    // Calculate relative pitch to the calibrated 0 degree baseline
     double relativePitch = sPitch - baselinePitch;
 
-    // PRE-CALCULATE EVENTS: We need to know if the user is yawning early on
-    // to prevent natural eye-squinting from triggering a false microsleep.
-    bool isYawningInstant = sMar > marThreshold;
+    bool isYawningInstant = sMar >= 0.0 && sMar > marThreshold;
     bool isNoddingInstant = relativePitch < DrowsinessConstants.headNodPitchThreshold;
 
-    // 2. Check for Occlusion (Eyes not seen for > 2 seconds)
-    if (isValidEAR) {
+    // 2. Occlusion Detection (Focus strictly on Eyes/Sunglasses)
+    // IMPORTANT: Check >= 0.0. If eyes are closed but visible, we still update the heartbeat.
+    if (currentEar >= 0.0) {
       _lastEyesDetectedTime = now;
     }
-    final timeSinceEyesLastSeen = now.difference(_lastEyesDetectedTime ?? now);
-    final bool isOccluded = timeSinceEyesLastSeen.inSeconds > 2;
+    
+    final bool isOccluded = now.difference(_lastEyesDetectedTime ?? now).inSeconds > 2;
 
-    // 3. Update History & PERCLOS (Time-Based)
+    // 3. Update History & PERCLOS
     bool eyesClosed = DrowsinessConstants.isDrowsy(sEar, earThreshold);
     bool isMicrosleep = false;
 
     if (!isOccluded) {
-      // Add current frame to time buffer
       _timeBuffer.add(FrameData(now, eyesClosed));
 
-      // Remove frames older than the PERCLOS window duration
       _timeBuffer.removeWhere((frame) => 
           now.difference(frame.timestamp) > DrowsinessConstants.perclosWindowDuration);
 
-      // Microsleep Detection (Continuous Closure)
-      // SUPPRESSION: If yawning, eyes naturally close. Reset/pause the microsleep timer.
+      // Microsleep Detection
       if (eyesClosed && !isYawningInstant) {
         _blinkStartTime ??= now;
         if (now.difference(_blinkStartTime!).inMilliseconds > DrowsinessConstants.microsleepDurationMs) {
@@ -117,25 +92,33 @@ class FusionEngine {
         _blinkStartTime = null;
       }
     } else {
-      _blinkStartTime = null; // Reset if occluded
+      _blinkStartTime = null; // Reset if eyes occluded
     }
 
+    // --- 30-SECOND WARMUP LOGIC ---
     int closedFrames = _timeBuffer.where((c) => c.isEyeClosed).length;
-    double currentPerclos = _timeBuffer.isEmpty ? 0.0 : closedFrames / _timeBuffer.length;
+    double currentPerclos = 0.0;
+
+    if (_timeBuffer.isNotEmpty) {
+      final bufferDuration = now.difference(_timeBuffer.first.timestamp);
+      if (bufferDuration.inSeconds < 30) {
+        int denominator = _timeBuffer.length < 450 ? 450 : _timeBuffer.length;
+        currentPerclos = closedFrames / denominator;
+      } else {
+        currentPerclos = closedFrames / _timeBuffer.length;
+      }
+    }
 
     // 4. Calculate Scores
     double score = 0.0;
 
-    // A. Eyes Score (PERCLOS)
     double effectivePerclosThreshold = _baselinePerclos + DrowsinessConstants.perclosTolerance;
     if (effectivePerclosThreshold == 0) effectivePerclosThreshold = 0.01;
 
     double perclosRatio = currentPerclos / effectivePerclosThreshold;
     if (perclosRatio > 2.5) perclosRatio = 2.5;
 
-    // B. Duration-Based Binary Events (Approach A)
     bool isContinuousDroop = false;
-    
     if (isNoddingInstant) {
       _droopStartTime ??= now;
       if (now.difference(_droopStartTime!).inMilliseconds > DrowsinessConstants.headDroopDurationMs) {
@@ -146,46 +129,42 @@ class FusionEngine {
     }
 
     bool isContinuousYawn = false;
-
     if (isYawningInstant) {
       _yawnStartTime ??= now;
       if (now.difference(_yawnStartTime!).inMilliseconds > DrowsinessConstants.yawnDurationMs) {
         isContinuousYawn = true;
       }
     } else {
-      // If yawn just finished and was a verified long yawn, log it
       if (_yawnStartTime != null && now.difference(_yawnStartTime!).inMilliseconds > DrowsinessConstants.yawnDurationMs) {
         _verifiedYawns.add(now);
       }
       _yawnStartTime = null;
     }
 
-    // Clean up old verified yawns outside the 5-minute window
     _verifiedYawns.removeWhere((timestamp) => 
         now.difference(timestamp) > DrowsinessConstants.yawnHistoryWindow);
 
-    // C. Lingering Penalties (Approach B)
     double penaltyScore = 0.0;
     if (_verifiedYawns.length >= DrowsinessConstants.frequentYawnCount) {
       penaltyScore += DrowsinessConstants.frequentYawnPenalty;
     }
 
-    // 5. Fusion Logic (Adaptive Weights)
+    // 5. DYNAMIC FUSION SCORING (Sunglasses Mode)
     if (isOccluded) {
-      // OCCLUSION MODE: Trust Head & Mouth
+      // OCCLUSION MODE: Eyes Blocked by Sunglasses.
+      // Ignore PERCLOS and Mouth. Rely entirely on Head posture.
       score += isNoddingInstant ? DrowsinessConstants.weightHeadOccluded : 0;
-      score += isContinuousYawn ? DrowsinessConstants.weightMouthOccluded : 0;
     } else {
-      // NORMAL MODE: Fusion
+      // NORMAL MODE: Full 3-channel fusion.
       score += perclosRatio * DrowsinessConstants.weightEyes;
       score += isNoddingInstant ? DrowsinessConstants.weightHead : 0;
       score += isContinuousYawn ? DrowsinessConstants.weightMouth : 0;
     }
     
-    score += penaltyScore; // Apply the lingering fatigue penalty
+    score += penaltyScore; 
 
-    // 6. Determine Status & Alert Level (State Machine)
-    int alertLevel = 0; // 0: Normal, 1: Warning, 2: Critical
+    // 6. Determine Status & Alert Level
+    int alertLevel = 0; 
     String status = "Monitoring (Score: ${score.toInt()})";
 
     if (isMicrosleep || isContinuousDroop || score >= DrowsinessConstants.scoreThresholdAlert) {
@@ -195,7 +174,7 @@ class FusionEngine {
       } else if (isContinuousDroop) {
         status = "ALERT: HEAD DROPPED!";
       } else if (isOccluded) {
-        status = "ALERT: Wake Up! (No Eyes Detected)";
+        status = "ALERT: Wake Up! (Eyes Blocked)";
       } else if (_verifiedYawns.length >= DrowsinessConstants.frequentYawnCount) {
         status = "ALERT: EXTREME FATIGUE (Frequent Yawns)";
       } else {
@@ -211,10 +190,15 @@ class FusionEngine {
         status = "Warning: Fatigue Signs";
       }
     } else {
-      // Informative statuses for low scores
-      if (isOccluded) status = "Occlusion Mode";
-      else if (isYawningInstant) status = "Yawning (Low Risk)";
-      else if (eyesClosed) status = "Blink";
+      if (sEar == -1.0) {
+        status = "EYES NOT DETECTED";
+      } else if (sMar == -1.0) {
+        status = "MOUTH NOT DETECTED";
+      } else if (isYawningInstant) {
+        status = "Yawning (Low Risk)";
+      } else if (eyesClosed) {
+        status = "Blink";
+      }
     }
 
     return {
@@ -224,7 +208,7 @@ class FusionEngine {
       'perclos': currentPerclos,
       'isOccluded': isOccluded,
       'smoothedMar': sMar,
-      'smoothedPitch': relativePitch, // Return the relative pitch so UI shows "0" at rest
+      'smoothedPitch': relativePitch, 
       'smoothedEar': sEar,
     };
   }

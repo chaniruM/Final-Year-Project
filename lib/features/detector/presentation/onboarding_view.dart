@@ -20,6 +20,11 @@ class _OnboardingViewState extends State<OnboardingView> {
       "description": "Our AI continuously monitors your facial expressions using standard phone cameras or Apple's advanced ARKit depth sensors to calculate your Drowsiness level in real-time."
     },
     {
+      "icon": Icons.warning_amber_rounded,
+      "title": "Proof of Concept",
+      "description": "DriveSafe is a proof-of-concept secondary warning system, not a certified OEM hardware device. It is never a substitute for adequate sleep and your responsibility to drive safely."
+    },
+    {
       "icon": Icons.phone_android,
       "title": "Dashboard Mounting",
       "description": "For the best tracking reliability, mount your phone centrally on your dashboard. Ensure your entire face is clearly visible to the front-facing camera."

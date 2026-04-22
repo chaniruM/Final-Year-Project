@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../data/calibration_service.dart';
-import 'calibration_view.dart';
+import 'calibration_instructions_view.dart';
 import 'widgets/profile_stat_card.dart';
 
 class ProfileView extends StatefulWidget {
@@ -46,7 +46,7 @@ class _ProfileViewState extends State<ProfileView> {
   Future<void> _navigateToCalibration() async {
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (context) => const CalibrationView()),
+      MaterialPageRoute(builder: (context) => const CalibrationInstructionsView()),
     );
     _loadProfileData();
   }

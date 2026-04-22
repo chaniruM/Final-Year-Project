@@ -26,9 +26,9 @@ class DrowsinessConstants {
   static const double weightHead = 40.0;
   static const double weightMouth = 20.0;
 
-  // --- SCORING WEIGHTS (Occluded Mode) ---
-  static const double weightHeadOccluded = 80.0;
-  static const double weightMouthOccluded = 40.0;
+  // --- SCORING WEIGHTS (Occluded Mode - Sunglasses) ---
+  // In Occluded mode, we rely 100% on Head Pitch (Nodding)
+  static const double weightHeadOccluded = 100.0;
 
   // --- ALERT LEVELS ---
   static const double scoreThresholdAlert = 100.0;
@@ -37,18 +37,17 @@ class DrowsinessConstants {
   // --- METHODS ---
 
   /// Calculates Geometric Eye Aspect Ratio (EAR)
-  static double calculateEAR(Face face) {
+  static double calculateEAR(Face face, {double? restingEar}) {
     final leftEye = face.contours[FaceContourType.leftEye]?.points;
     final rightEye = face.contours[FaceContourType.rightEye]?.points;
 
+    // If contours fail, it's an occlusion (e.g., Sunglasses).
+    // We explicitly return -1.0 and ignore probabilities to prevent false alerts.
     if (leftEye == null || rightEye == null || leftEye.length < 3 || rightEye.length < 3) {
-      if (face.leftEyeOpenProbability == null && face.rightEyeOpenProbability == null) {
-        return -1.0; // Eyes completely occluded
-      }
-      double prob = ((face.leftEyeOpenProbability ?? 0.5) + (face.rightEyeOpenProbability ?? 0.5)) / 2;
-      return prob * 0.5;
+      return -1.0; 
     }
 
+    // Normal Geometric Calculation
     double leftEAR = _getEyeRatio(leftEye);
     double rightEAR = _getEyeRatio(rightEye);
 
@@ -78,6 +77,7 @@ class DrowsinessConstants {
     final upper = face.contours[FaceContourType.upperLipBottom]?.points;
     final lower = face.contours[FaceContourType.lowerLipTop]?.points;
 
+    // If mouth contours fail, return 0.0 (Neutral) because we are ignoring mask logic
     if (upper == null || lower == null || upper.isEmpty || lower.isEmpty) return 0.0;
 
     int centerU = upper.length ~/ 2;
@@ -103,12 +103,9 @@ class DrowsinessConstants {
   // --- ARKIT METHODS ---
 
   static double calculateArKitEAR(double eyeBlinkLeft, double eyeBlinkRight, {bool isTracked = true}) {
-    if (!isTracked) return -1.0; // Mesh is fully lost
-    
-    // ARKit returns 0.0 for open, 1.0 for closed.
-    // We invert this to match EAR logic (High = Open, Low = Closed).
+    if (!isTracked) return -1.0; 
     double avgBlink = (eyeBlinkLeft + eyeBlinkRight) / 2.0;
-    return (1.0 - avgBlink) * 0.35; // Scaling factor to match geometric EAR roughly
+    return (1.0 - avgBlink) * 0.35; 
   }
 
   static double calculateArKitMAR(double jawOpen) {
@@ -118,6 +115,7 @@ class DrowsinessConstants {
   }
 
   static bool isDrowsy(double currentEAR, double threshold) {
+    if (currentEAR < 0.0) return false; 
     return currentEAR < threshold;
   }
 }

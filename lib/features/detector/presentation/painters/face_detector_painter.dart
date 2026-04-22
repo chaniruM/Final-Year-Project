@@ -4,6 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'coordinates_translator.dart';
 
+/// A highly specialized CustomPainter that translates Google ML Kit's raw face tracking data
+/// (which is based on the absolute coordinates of the camera hardware image) into the relative
+/// coordinate space of the Flutter screen rendering canvas.
+///
+/// It visually bounds the face in a dynamic box and plots real-time dot anchors over 
+/// critical facial landmarks representing the eyes, nose, cheeks, and inner lips 
+/// for real-time mathematical validation of EAR and MAR tracking vectors.
 class FaceDetectorPainter extends CustomPainter {
   FaceDetectorPainter({
     required this.faces,
