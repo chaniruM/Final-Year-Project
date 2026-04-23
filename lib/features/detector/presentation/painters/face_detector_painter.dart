@@ -8,8 +8,8 @@ import 'coordinates_translator.dart';
 /// (which is based on the absolute coordinates of the camera hardware image) into the relative
 /// coordinate space of the Flutter screen rendering canvas.
 ///
-/// It visually bounds the face in a dynamic box and plots real-time dot anchors over 
-/// critical facial landmarks representing the eyes, nose, cheeks, and inner lips 
+/// It visually bounds the face in a dynamic box and plots real-time dot anchors over
+/// critical facial landmarks representing the eyes, nose, cheeks, and inner lips
 /// for real-time mathematical validation of EAR and MAR tracking vectors.
 class FaceDetectorPainter extends CustomPainter {
   FaceDetectorPainter({
@@ -67,20 +67,17 @@ class FaceDetectorPainter extends CustomPainter {
     for (final Face face in faces) {
       // Calculate bounding box using the mirrored X transform
       final left = transformX(face.boundingBox.left);
-      final top = translateY(face.boundingBox.top, size, imageSize, rotation, cameraLensDirection);
+      final top = translateY(
+          face.boundingBox.top, size, imageSize, rotation, cameraLensDirection);
       final right = transformX(face.boundingBox.right);
-      final bottom = translateY(face.boundingBox.bottom, size, imageSize, rotation, cameraLensDirection);
+      final bottom = translateY(face.boundingBox.bottom, size, imageSize,
+          rotation, cameraLensDirection);
 
       // 1. Draw bounding box
       canvas.drawRect(
-          Rect.fromLTRB(
-              left < right ? left : right,
-              top,
-              left < right ? right : left,
-              bottom
-          ),
-          paint
-      );
+          Rect.fromLTRB(left < right ? left : right, top,
+              left < right ? right : left, bottom),
+          paint);
 
       // 2. Draw Eye Contours (Used for EAR)
       void paintContour(FaceContourType type) {
@@ -90,7 +87,8 @@ class FaceDetectorPainter extends CustomPainter {
             canvas.drawCircle(
               Offset(
                 transformX(point.x.toDouble()),
-                translateY(point.y.toDouble(), size, imageSize, rotation, cameraLensDirection),
+                translateY(point.y.toDouble(), size, imageSize, rotation,
+                    cameraLensDirection),
               ),
               2.0, // Small green dot
               eyePointPaint,
@@ -108,7 +106,8 @@ class FaceDetectorPainter extends CustomPainter {
         canvas.drawCircle(
           Offset(
             transformX(nose!.position.x.toDouble()),
-            translateY(nose.position.y.toDouble(), size, imageSize, rotation, cameraLensDirection),
+            translateY(nose.position.y.toDouble(), size, imageSize, rotation,
+                cameraLensDirection),
           ),
           3,
           paint,
@@ -119,7 +118,10 @@ class FaceDetectorPainter extends CustomPainter {
       final upperInner = face.contours[FaceContourType.upperLipBottom]?.points;
       final lowerInner = face.contours[FaceContourType.lowerLipTop]?.points;
 
-      if (upperInner != null && lowerInner != null && upperInner.isNotEmpty && lowerInner.isNotEmpty) {
+      if (upperInner != null &&
+          lowerInner != null &&
+          upperInner.isNotEmpty &&
+          lowerInner.isNotEmpty) {
         // --- A. Height Points (Yellow) ---
         int centerU = upperInner.length ~/ 2;
         int centerL = lowerInner.length ~/ 2;
@@ -128,19 +130,28 @@ class FaceDetectorPainter extends CustomPainter {
 
         // Get 3 central points from upper inner lip
         if (centerU >= 1 && centerU < upperInner.length - 1) {
-          heightPoints.addAll([upperInner[centerU - 1], upperInner[centerU], upperInner[centerU + 1]]);
+          heightPoints.addAll([
+            upperInner[centerU - 1],
+            upperInner[centerU],
+            upperInner[centerU + 1]
+          ]);
         }
 
         // Get 3 central points from lower inner lip
         if (centerL >= 1 && centerL < lowerInner.length - 1) {
-          heightPoints.addAll([lowerInner[centerL - 1], lowerInner[centerL], lowerInner[centerL + 1]]);
+          heightPoints.addAll([
+            lowerInner[centerL - 1],
+            lowerInner[centerL],
+            lowerInner[centerL + 1]
+          ]);
         }
 
         for (var point in heightPoints) {
           canvas.drawCircle(
             Offset(
               transformX(point.x.toDouble()),
-              translateY(point.y.toDouble(), size, imageSize, rotation, cameraLensDirection),
+              translateY(point.y.toDouble(), size, imageSize, rotation,
+                  cameraLensDirection),
             ),
             2.5, // Yellow dots
             heightPointPaint,
@@ -153,12 +164,12 @@ class FaceDetectorPainter extends CustomPainter {
 
         final p1Offset = Offset(
             transformX(p1.x.toDouble()),
-            translateY(p1.y.toDouble(), size, imageSize, rotation, cameraLensDirection)
-        );
+            translateY(p1.y.toDouble(), size, imageSize, rotation,
+                cameraLensDirection));
         final p2Offset = Offset(
             transformX(p2.x.toDouble()),
-            translateY(p2.y.toDouble(), size, imageSize, rotation, cameraLensDirection)
-        );
+            translateY(p2.y.toDouble(), size, imageSize, rotation,
+                cameraLensDirection));
 
         canvas.drawCircle(p1Offset, 4.0, widthPointPaint);
         canvas.drawCircle(p2Offset, 4.0, widthPointPaint);

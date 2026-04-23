@@ -31,7 +31,7 @@
 
 - **Hybrid Sensing Engine:** Seamlessly transitions between ARKit (3D blendshapes) and ML Kit (2D contours).
 - **Multi-Factor Fusion Engine:** Aggregates PERCLOS (Percentage of Eye Closure), Head Pose (pitch/yaw), and Yawning (Mouth Aspect Ratio) into a comprehensive drowsiness score.
-- **Occlusion Handling (Sunglasses Mode):** Automatically detects if eyes are covered and gracefully relies on head pose and mouth movements.
+- **Multi-Model Occlusion Handling (Sunglasses Mode):** Concurrently runs an Image Labeler alongside the Face Detector. If sunglasses are detected, the system safely overrides geometric eye tracking to prevent mesh hallucinations and dynamically shifts reliance entirely to head pose and mouth movements.
 - **Premium UI/UX:** Built with a modern glassmorphism design, vibrant color palettes, and smooth micro-animations.
 - **Privacy-First:** 100% on-device processing. No video feeds or biometric data are sent to the cloud.
 - **Background Persistence:** Utilizes Wakelock Plus to keep the screen and camera active during long drives.
@@ -44,7 +44,7 @@
 |----------|------------|
 | **Framework** | Flutter (Dart) |
 | **State Management** | Riverpod |
-| **Computer Vision (2D)** | `google_mlkit_face_detection` |
+| **Computer Vision (2D)** | `google_mlkit_face_detection`, `google_mlkit_image_labeling` |
 | **Computer Vision (3D)** | `arkit_plugin` |
 | **Native Integration** | Swift (iOS AppDelegate MethodChannels) |
 | **Local Storage** | `shared_preferences` |
@@ -88,7 +88,7 @@ Follow these steps to set up the development environment on your local machine.
 ```bash
 git clone https://github.com/chaniruM/Final-Year-Project.git
 cd drive-safe
-git checkout IPD-demonstration
+git checkout final-submission
 ```
 
 ### 2. Install Dependencies (Using FVM)
@@ -204,6 +204,11 @@ Before driving, the system needs to learn your "neutral" resting face:
 
 ### Head Pose (Pitch & Yaw)
 - Uses Quaternion decomposition (ARKit) or direct Euler angles (ML Kit) to detect "nodding off" (pitch) or "looking away" (yaw) distractions.
+
+### Multi-Model Occlusion Handling (Sunglasses)
+- The system runs an **Image Labeler model concurrently** with the Face Detector to detect eyewear.
+- If sunglasses are confidently detected, the system forces a Sentinel Occlusion flag (EAR = -1.0) because geometric eye contours cannot be trusted.
+- The **Fusion Engine** reacts dynamically by disabling PERCLOS and shifting the scoring algorithm to rely exclusively on **Head Pitch (80 weight)** and **Yawning (40 weight)**, ensuring the driver is still monitored safely without triggering false alerts.
 
 ---
 

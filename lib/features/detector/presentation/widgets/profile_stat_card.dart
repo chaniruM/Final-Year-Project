@@ -29,7 +29,6 @@ class ProfileStatCard extends StatelessWidget {
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             ),
             const Divider(height: 30),
-
             _buildRow(
               icon: Icons.remove_red_eye,
               label: "EAR Threshold",

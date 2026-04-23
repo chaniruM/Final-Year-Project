@@ -46,7 +46,8 @@ class DetectorStatusPanel extends StatelessWidget {
           decoration: BoxDecoration(
             color: bgColor.withOpacity(alertLevel > 0 ? 0.6 : 0.4),
             borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: Colors.white.withOpacity(0.15), width: 1.5),
+            border:
+                Border.all(color: Colors.white.withOpacity(0.15), width: 1.5),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withOpacity(0.2),
@@ -56,69 +57,67 @@ class DetectorStatusPanel extends StatelessWidget {
             ],
           ),
           child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            status.toUpperCase(),
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 22,
-                fontWeight: FontWeight.bold),
-          ),
-          if (isMonitoring)
-            Padding(
-              padding: const EdgeInsets.only(top: 4.0),
-              child: Text(
-                "Risk Score: ${score.toInt()}",
-                style: TextStyle(
-                    color: score > 75 ? Colors.redAccent : Colors.cyanAccent,
-                    fontSize: 14,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                status.toUpperCase(),
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
                     fontWeight: FontWeight.bold),
               ),
-            ),
-          const SizedBox(height: 12),
-
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _buildMetric("EAR",
-                  "${debugEar.toStringAsFixed(2)} / ${baselineEar.toStringAsFixed(2)}"),
-              _buildMetric("MAR",
-                  "${debugMar.toStringAsFixed(2)} / ${baselineMar.toStringAsFixed(2)}"),
-              _buildMetric("PITCH", "${debugPitch.toInt()}°"),
+              if (isMonitoring)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4.0),
+                  child: Text(
+                    "Risk Score: ${score.toInt()}",
+                    style: TextStyle(
+                        color:
+                            score > 75 ? Colors.redAccent : Colors.cyanAccent,
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold),
+                  ),
+                ),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _buildMetric("EAR",
+                      "${debugEar.toStringAsFixed(2)} / ${baselineEar.toStringAsFixed(2)}"),
+                  _buildMetric("MAR",
+                      "${debugMar.toStringAsFixed(2)} / ${baselineMar.toStringAsFixed(2)}"),
+                  _buildMetric("PITCH", "${debugPitch.toInt()}°"),
+                ],
+              ),
+              const SizedBox(height: 20),
+              if (alertLevel > 0)
+                _buildButton(
+                  onPressed: onDismiss,
+                  icon: Icons.notifications_off,
+                  label: "DISMISS & RESET",
+                  bgColor: Colors.white,
+                  fgColor: alertLevel == 2 ? Colors.red : Colors.orange,
+                )
+              else if (!isMonitoring)
+                _buildButton(
+                  onPressed: onStart,
+                  icon: Icons.play_circle_filled,
+                  label: "START MONITORING",
+                  bgColor: Colors.green,
+                  fgColor: Colors.white,
+                )
+              else
+                _buildButton(
+                  onPressed: onStop,
+                  icon: Icons.stop_circle,
+                  label: "STOP MONITORING",
+                  bgColor: Colors.white12,
+                  fgColor: Colors.white,
+                ),
             ],
           ),
-
-          const SizedBox(height: 20),
-
-          if (alertLevel > 0)
-            _buildButton(
-              onPressed: onDismiss,
-              icon: Icons.notifications_off,
-              label: "DISMISS & RESET",
-              bgColor: Colors.white,
-              fgColor: alertLevel == 2 ? Colors.red : Colors.orange,
-            )
-          else if (!isMonitoring)
-            _buildButton(
-              onPressed: onStart,
-              icon: Icons.play_circle_filled,
-              label: "START MONITORING",
-              bgColor: Colors.green,
-              fgColor: Colors.white,
-            )
-          else
-            _buildButton(
-              onPressed: onStop,
-              icon: Icons.stop_circle,
-              label: "STOP MONITORING",
-              bgColor: Colors.white12,
-              fgColor: Colors.white,
-            ),
-          ],
         ),
-      ),
       ),
     );
   }
@@ -126,13 +125,12 @@ class DetectorStatusPanel extends StatelessWidget {
   Widget _buildMetric(String label, String value) {
     return Column(
       children: [
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10)),
+        Text(label,
+            style: const TextStyle(color: Colors.white70, fontSize: 10)),
         const SizedBox(height: 4),
         Text(value,
             style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontFamily: "Monospace")),
+                color: Colors.white, fontSize: 16, fontFamily: "Monospace")),
       ],
     );
   }
@@ -159,7 +157,8 @@ class DetectorStatusPanel extends StatelessWidget {
           elevation: alertLevel > 0 ? 8 : 0,
           shadowColor: bgColor.withOpacity(0.5),
           padding: const EdgeInsets.symmetric(vertical: 16),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
         ),
       ),
     );

@@ -30,7 +30,9 @@ class TrackingUtils {
     } else {
       if (cameraController != null) {
         if (cameraController.value.isStreamingImages) {
-          try { await cameraController.stopImageStream(); } catch (_) {}
+          try {
+            await cameraController.stopImageStream();
+          } catch (_) {}
         }
         await cameraController.dispose();
       }
@@ -84,7 +86,9 @@ class TrackingUtils {
                       borderRadius: BorderRadius.circular(16),
                       boxShadow: [
                         BoxShadow(
-                          color: (useARKit ? Colors.cyanAccent : Colors.tealAccent).withOpacity(0.4),
+                          color:
+                              (useARKit ? Colors.cyanAccent : Colors.tealAccent)
+                                  .withOpacity(0.4),
                           blurRadius: 8,
                           spreadRadius: 1,
                         )

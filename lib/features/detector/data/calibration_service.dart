@@ -6,9 +6,12 @@ class CalibrationService {
   static const String _keyMar = 'drowsy_threshold_mar';
   static const String _keyPitch = 'drowsy_baseline_pitch';
   static const String _keyCalibratedEngine = 'calibrated_engine_mode';
-  static const String _keyTrackingPreference = 'global_tracking_preference_arkit';
+  static const String _keyTrackingPreference =
+      'global_tracking_preference_arkit';
 
-  Future<void> saveBaselines(double earThreshold, double perclosBaseline, double marThreshold, double pitchBaseline, {required bool isARKit}) async {
+  Future<void> saveBaselines(double earThreshold, double perclosBaseline,
+      double marThreshold, double pitchBaseline,
+      {required bool isARKit}) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_keyThreshold, earThreshold);
     await prefs.setDouble(_keyPerclos, perclosBaseline);

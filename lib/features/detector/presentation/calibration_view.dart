@@ -23,11 +23,9 @@ class CalibrationView extends StatefulWidget {
 }
 
 class _CalibrationViewState extends State<CalibrationView> {
-  // --- CAMERA ---
   CameraController? _cameraController;
   final FaceDetectorService _detectorService = FaceDetectorService();
 
-  // --- ARKIT ---
   ARKitController? _arkitController;
   ARKitNode? _faceNode;
 
@@ -51,7 +49,7 @@ class _CalibrationViewState extends State<CalibrationView> {
   double _currentPreviewMar = 0.0;
   bool _isOccluded = false;
   CustomPaint? _customPaint;
-  
+
   int _frameCount = 0;
   DateTime? _lastFaceDetectedTime;
 
@@ -64,7 +62,9 @@ class _CalibrationViewState extends State<CalibrationView> {
   Future<void> _checkCapabilities() async {
     _isARKitSupported = await CapabilityUtils.supportsARKit();
     final savedPref = await _calibrationService.getTrackingPreference();
-    _useARKit = savedPref != null ? (savedPref && _isARKitSupported) : _isARKitSupported;
+    _useARKit = savedPref != null
+        ? (savedPref && _isARKitSupported)
+        : _isARKitSupported;
 
     if (!_useARKit) {
       _cameraController = await CameraUtils.initializeFrontCamera();
@@ -76,7 +76,8 @@ class _CalibrationViewState extends State<CalibrationView> {
   }
 
   Future<void> _toggleTrackingMode() async {
-    if (!_isARKitSupported || _isCalibrating) return; // Prevent toggle during calibration
+    if (!_isARKitSupported || _isCalibrating)
+      return; // Prevent toggle during calibration
 
     final newController = await TrackingUtils.toggleTrackingMode(
       useARKit: _useARKit,
@@ -126,7 +127,8 @@ class _CalibrationViewState extends State<CalibrationView> {
         timer.cancel();
         if (_isCalibrating) _finishCalibration();
       } else {
-        if (_lastFaceDetectedTime != null && DateTime.now().difference(_lastFaceDetectedTime!).inSeconds >= 3) {
+        if (_lastFaceDetectedTime != null &&
+            DateTime.now().difference(_lastFaceDetectedTime!).inSeconds >= 3) {
           timer.cancel();
           if (mounted) {
             setState(() {
@@ -143,24 +145,31 @@ class _CalibrationViewState extends State<CalibrationView> {
     });
   }
 
-  // --- PROCESSING ---
-
+  /// Processes frames from the ML Kit camera stream.
   void _processCameraImage(CameraImage image) async {
     if (_isProcessing) return;
-    
+
     _frameCount++;
     if (_frameCount % 2 != 0) return;
-    
+
     _isProcessing = true;
 
     try {
-      final inputImage = CameraUtils.prepareInputImage(_cameraController!, image);
+      final inputImage =
+          CameraUtils.prepareInputImage(_cameraController!, image);
       if (inputImage != null) {
-        final faces = await _detectorService.processImage(inputImage);
+        final result = await _detectorService.processImage(inputImage);
+        final List<Face> faces = List<Face>.from(result['faces'] ?? []);
+        final bool hasSunglasses = result['hasSunglasses'] == true;
 
         if (faces.isNotEmpty) {
           final face = faces.first;
-          final ear = DrowsinessConstants.calculateEAR(face);
+
+          double ear = DrowsinessConstants.calculateEAR(face);
+          if (hasSunglasses) {
+            ear = -1.0;
+          }
+
           final mar = DrowsinessConstants.calculateMAR(face);
           final pitch = face.headEulerAngleX ?? 0.0;
 
@@ -188,7 +197,12 @@ class _CalibrationViewState extends State<CalibrationView> {
             });
           }
         } else {
-          if (mounted) setState(() => _customPaint = null);
+          if (mounted) {
+            setState(() {
+              _customPaint = null;
+              _isOccluded = false;
+            });
+          }
         }
       }
     } catch (e) {
@@ -209,7 +223,7 @@ class _CalibrationViewState extends State<CalibrationView> {
     final material = ARKitMaterial(
         fillMode: ARKitFillMode.lines,
         diffuse:
-        ARKitMaterialProperty.color(Colors.cyanAccent.withOpacity(0.8)));
+            ARKitMaterialProperty.color(Colors.cyanAccent.withOpacity(0.8)));
     anchor.geometry.materials.value = [material];
     _faceNode = ARKitNode(geometry: anchor.geometry);
     _arkitController?.add(_faceNode!, parentNodeName: anchor.nodeName);
@@ -219,17 +233,18 @@ class _CalibrationViewState extends State<CalibrationView> {
     if (anchor is ARKitFaceAnchor && mounted) {
       _frameCount++;
       if (_frameCount % 3 != 0) return;
-        
+
       if (_faceNode != null) {
         _arkitController?.updateFaceGeometry(_faceNode!, anchor.identifier);
       }
       final blendShapes = anchor.blendShapes;
       final ear = DrowsinessConstants.calculateArKitEAR(
-          blendShapes['eyeBlink_L'] ?? 0.0, 
-          blendShapes['eyeBlink_R'] ?? 0.0,
-          isTracked: anchor.isTracked,
+        blendShapes['eyeBlink_L'] ?? 0.0,
+        blendShapes['eyeBlink_R'] ?? 0.0,
+        isTracked: anchor.isTracked,
       );
-      final mar = DrowsinessConstants.calculateArKitMAR(blendShapes['jawOpen'] ?? 0.0);
+      final mar =
+          DrowsinessConstants.calculateArKitMAR(blendShapes['jawOpen'] ?? 0.0);
       final pitch = _getPitchFromTransform(anchor.transform);
 
       if (_isCalibrating) {
@@ -270,43 +285,48 @@ class _CalibrationViewState extends State<CalibrationView> {
       return;
     }
 
-    // --- EAR CALIBRATION ---
+    // Extract the 85th percentile for EAR calibration to filter out blinks.
     _capturedEarValues.sort();
-    int earIndex = (_capturedEarValues.length * 0.85).toInt().clamp(0, _capturedEarValues.length - 1);
+    int earIndex = (_capturedEarValues.length * 0.85)
+        .toInt()
+        .clamp(0, _capturedEarValues.length - 1);
     double baselineOpenEar = _capturedEarValues[earIndex];
     double personalEarThreshold = baselineOpenEar * 0.75;
 
-    // --- PERCLOS BASELINE (Scientific Constant) ---
-    // 10 seconds is statistically too short to measure a natural blink rate.
-    // We use the universally researched normal waking PERCLOS of 5% (0.05).
+    // 10 seconds is statistically too short to measure a natural blink rate,
+    // so we use the universally researched normal waking PERCLOS of 5% (0.05).
     double baselinePerclos = 0.05;
 
-    // --- MAR CALIBRATION ---
+    // Extract the 20th percentile for MAR calibration to filter out yawns/talking.
     double personalMarThreshold = 0.5;
     if (_capturedMarValues.isNotEmpty) {
       _capturedMarValues.sort();
-      int marIndex = (_capturedMarValues.length * 0.20).toInt().clamp(0, _capturedMarValues.length - 1);
+      int marIndex = (_capturedMarValues.length * 0.20)
+          .toInt()
+          .clamp(0, _capturedMarValues.length - 1);
       double baselineClosedMar = _capturedMarValues[marIndex];
       personalMarThreshold = (baselineClosedMar + 0.25).clamp(0.3, 0.6);
     }
 
-    // --- PITCH BASELINE ---
+    // Calculate the mean of the middle 60% of pitch values.
     double baselinePitch = 0.0;
     if (_capturedPitchValues.isNotEmpty) {
-      // Define sortedPitchValues properly instead of using _capturedPitchValues.sort()
       List<double> sortedPitchValues = List.from(_capturedPitchValues)..sort();
-      
+
       int pStart = (sortedPitchValues.length * 0.20).toInt();
       int pEnd = (sortedPitchValues.length * 0.80).toInt();
-      if (pEnd <= pStart) { pStart = 0; pEnd = sortedPitchValues.length; }
+      if (pEnd <= pStart) {
+        pStart = 0;
+        pEnd = sortedPitchValues.length;
+      }
       List<double> validPitch = sortedPitchValues.sublist(pStart, pEnd);
       baselinePitch = validPitch.reduce((a, b) => a + b) / validPitch.length;
     }
 
     await _calibrationService.saveBaselines(
-      personalEarThreshold, 
-      baselinePerclos, 
-      personalMarThreshold, 
+      personalEarThreshold,
+      baselinePerclos,
+      personalMarThreshold,
       baselinePitch,
       isARKit: _useARKit,
     );
@@ -314,7 +334,8 @@ class _CalibrationViewState extends State<CalibrationView> {
     setState(() {
       _isCalibrating = false;
       _calibrationSuccess = true;
-      _message = "Success!\nEAR Thresh: ${personalEarThreshold.toStringAsFixed(3)}\nBase PERCLOS: ${(baselinePerclos * 100).toStringAsFixed(1)}%\nBase Pitch: ${baselinePitch.toStringAsFixed(1)}°";
+      _message =
+          "Success!\nEAR Thresh: ${personalEarThreshold.toStringAsFixed(3)}\nBase PERCLOS: ${(baselinePerclos * 100).toStringAsFixed(1)}%\nBase Pitch: ${baselinePitch.toStringAsFixed(1)}°";
     });
   }
 
@@ -367,9 +388,7 @@ class _CalibrationViewState extends State<CalibrationView> {
           _buildModeOption(
             label: "ML Kit",
             selected: !_useARKit,
-            onTap: !_useARKit || _isCalibrating
-                ? null
-                : _toggleTrackingMode,
+            onTap: !_useARKit || _isCalibrating ? null : _toggleTrackingMode,
           ),
           const SizedBox(width: 6),
           _buildModeOption(
@@ -419,8 +438,8 @@ class _CalibrationViewState extends State<CalibrationView> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final bool isCameraReady =
-        _useARKit || (_cameraController != null && _cameraController!.value.isInitialized);
+    final bool isCameraReady = _useARKit ||
+        (_cameraController != null && _cameraController!.value.isInitialized);
 
     Widget backgroundLayer;
     if (_useARKit) {
@@ -470,7 +489,8 @@ class _CalibrationViewState extends State<CalibrationView> {
                     color: Colors.white.withOpacity(0.08),
                   ),
                 ),
-                child: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 18),
+                child: const Icon(Icons.arrow_back_ios_new,
+                    color: Colors.white, size: 18),
               ),
             ),
           ),
@@ -516,32 +536,33 @@ class _CalibrationViewState extends State<CalibrationView> {
                   child: _buildTrackingModeSwitcher(),
                 ),
               ),
-            
+
             if (_isOccluded && _isCalibrating)
               Positioned(
                 top: MediaQuery.of(context).padding.top + 140,
                 left: 20,
                 right: 20,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: BoxDecoration(
-                    color: Colors.black87, 
+                    color: Colors.black87,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: Colors.redAccent, width: 2),
                   ),
                   child: const Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.visibility_off, color: Colors.redAccent, size: 28),
+                      Icon(Icons.visibility_off,
+                          color: Colors.redAccent, size: 28),
                       SizedBox(width: 12),
                       Text(
-                        "EYES OCCLUDED", 
+                        "EYES OCCLUDED",
                         style: TextStyle(
-                          color: Colors.redAccent, 
-                          fontWeight: FontWeight.w900,
-                          fontSize: 18,
-                          letterSpacing: 1.2
-                        ),
+                            color: Colors.redAccent,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 18,
+                            letterSpacing: 1.2),
                       ),
                     ],
                   ),
@@ -557,30 +578,50 @@ class _CalibrationViewState extends State<CalibrationView> {
                     child: Column(
                       children: [
                         Text("EAR: ${_currentPreviewEar.toStringAsFixed(3)}",
-                            style: const TextStyle(color: Colors.greenAccent, fontSize: 20, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 2, color: Colors.black)])),
+                            style: const TextStyle(
+                                color: Colors.greenAccent,
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                shadows: [
+                                  Shadow(blurRadius: 2, color: Colors.black)
+                                ])),
                         Text("MAR: ${_currentPreviewMar.toStringAsFixed(3)}",
-                            style: const TextStyle(color: Colors.yellowAccent, fontSize: 20, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 2, color: Colors.black)])),
+                            style: const TextStyle(
+                                color: Colors.yellowAccent,
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                shadows: [
+                                  Shadow(blurRadius: 2, color: Colors.black)
+                                ])),
                       ],
                     ),
                   )
                 else
                   const SizedBox.shrink(),
-
                 ClipRRect(
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(32)),
                   child: BackdropFilter(
                     filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
                     child: Container(
                       padding: const EdgeInsets.all(32),
                       decoration: BoxDecoration(
                         color: Colors.black.withOpacity(0.5),
-                        border: Border(top: BorderSide(color: Colors.white.withOpacity(0.15), width: 1.5)),
+                        border: Border(
+                            top: BorderSide(
+                                color: Colors.white.withOpacity(0.15),
+                                width: 1.5)),
                       ),
                       width: double.infinity,
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(_message, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w500)),
+                          Text(_message,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w500)),
                           const SizedBox(height: 16),
                           if (_isCalibrating)
                             Container(
@@ -588,19 +629,61 @@ class _CalibrationViewState extends State<CalibrationView> {
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
                                 color: Colors.cyanAccent.withOpacity(0.1),
-                                boxShadow: [BoxShadow(color: Colors.cyanAccent.withOpacity(0.3), blurRadius: 30, spreadRadius: 5)],
+                                boxShadow: [
+                                  BoxShadow(
+                                      color: Colors.cyanAccent.withOpacity(0.3),
+                                      blurRadius: 30,
+                                      spreadRadius: 5)
+                                ],
                               ),
                               child: Text(
-                                "$_timerCount", 
-                                style: const TextStyle(fontSize: 64, fontWeight: FontWeight.w900, color: Colors.cyanAccent),
+                                "$_timerCount",
+                                style: const TextStyle(
+                                    fontSize: 64,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.cyanAccent),
                               ),
                             ),
                           const SizedBox(height: 32),
-
                           if (!_isCalibrating && _calibrationSuccess)
-                            SizedBox(width: double.infinity, height: 56, child: ElevatedButton.icon(onPressed: _safeExit, icon: const Icon(Icons.check_circle), label: const Text("DONE - BACK TO DETECTOR"), style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white, elevation: 8, shadowColor: Colors.green.withOpacity(0.5), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)))))
+                            SizedBox(
+                                width: double.infinity,
+                                height: 56,
+                                child: ElevatedButton.icon(
+                                    onPressed: _safeExit,
+                                    icon: const Icon(Icons.check_circle),
+                                    label:
+                                        const Text("DONE - BACK TO DETECTOR"),
+                                    style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.green,
+                                        foregroundColor: Colors.white,
+                                        elevation: 8,
+                                        shadowColor:
+                                            Colors.green.withOpacity(0.5),
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(30)))))
                           else
-                            SizedBox(width: double.infinity, height: 56, child: ElevatedButton(onPressed: _isCalibrating ? null : _startCalibration, style: ElevatedButton.styleFrom(backgroundColor: Colors.cyanAccent, foregroundColor: Colors.black, elevation: _isCalibrating ? 0 : 8, shadowColor: Colors.cyanAccent.withOpacity(0.5), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30))), child: Text(_isCalibrating ? "CALIBRATING..." : "START CALIBRATION", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)))),
+                            SizedBox(
+                                width: double.infinity,
+                                height: 56,
+                                child: ElevatedButton(
+                                    onPressed: _isCalibrating
+                                        ? null
+                                        : _startCalibration,
+                                    style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.cyanAccent,
+                                        foregroundColor: Colors.black,
+                                        elevation: _isCalibrating ? 0 : 8,
+                                        shadowColor:
+                                            Colors.cyanAccent.withOpacity(0.5),
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(30))),
+                                    child: Text(_isCalibrating ? "CALIBRATING..." : "START CALIBRATION",
+                                        style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold)))),
                         ],
                       ),
                     ),

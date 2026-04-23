@@ -29,12 +29,14 @@ class CalibrationInstructionsView extends StatelessWidget {
               width: 300,
               height: 300,
               decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.cyanAccent.withOpacity(0.15),
-                boxShadow: [
-                  BoxShadow(color: Colors.cyanAccent.withOpacity(0.2), blurRadius: 100, spreadRadius: 100),
-                ]
-              ),
+                  shape: BoxShape.circle,
+                  color: Colors.cyanAccent.withOpacity(0.15),
+                  boxShadow: [
+                    BoxShadow(
+                        color: Colors.cyanAccent.withOpacity(0.2),
+                        blurRadius: 100,
+                        spreadRadius: 100),
+                  ]),
             ),
           ),
           Positioned(
@@ -44,18 +46,21 @@ class CalibrationInstructionsView extends StatelessWidget {
               width: 300,
               height: 300,
               decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.purpleAccent.withOpacity(0.15),
-                boxShadow: [
-                  BoxShadow(color: Colors.purpleAccent.withOpacity(0.2), blurRadius: 100, spreadRadius: 100),
-                ]
-              ),
+                  shape: BoxShape.circle,
+                  color: Colors.purpleAccent.withOpacity(0.15),
+                  boxShadow: [
+                    BoxShadow(
+                        color: Colors.purpleAccent.withOpacity(0.2),
+                        blurRadius: 100,
+                        spreadRadius: 100),
+                  ]),
             ),
           ),
-          
+
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32.0, vertical: 24.0),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 32.0, vertical: 24.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
@@ -95,28 +100,31 @@ class CalibrationInstructionsView extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 40),
-                  
+
                   // Instruction Items
                   _buildInstructionItem(
                     icon: Icons.face_retouching_natural,
                     title: "Neutral Expression",
-                    description: "Keep your face completely relaxed without smiling or frowning.",
+                    description:
+                        "Keep your face completely relaxed without smiling or frowning.",
                   ),
                   const SizedBox(height: 20),
                   _buildInstructionItem(
                     icon: Icons.straight,
                     title: "Look Straight",
-                    description: "Stare directly into the camera as if looking at the road ahead.",
+                    description:
+                        "Stare directly into the camera as if looking at the road ahead.",
                   ),
                   const SizedBox(height: 20),
                   _buildInstructionItem(
                     icon: Icons.brightness_high,
                     title: "Good Lighting",
-                    description: "Ensure your face is well-lit and clearly visible.",
+                    description:
+                        "Ensure your face is well-lit and clearly visible.",
                   ),
-                  
+
                   const Spacer(),
-                  
+
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
@@ -145,7 +153,10 @@ class CalibrationInstructionsView extends StatelessWidget {
                       ),
                       child: const Text(
                         "START CALIBRATION",
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, letterSpacing: 1.1),
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            letterSpacing: 1.1),
                       ),
                     ),
                   ),
@@ -158,7 +169,10 @@ class CalibrationInstructionsView extends StatelessWidget {
     );
   }
 
-  Widget _buildInstructionItem({required IconData icon, required String title, required String description}) {
+  Widget _buildInstructionItem(
+      {required IconData icon,
+      required String title,
+      required String description}) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
